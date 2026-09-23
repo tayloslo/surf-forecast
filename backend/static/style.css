@@ -1,0 +1,164 @@
+:root {
+  --ocean-dark: #0a3d5c;
+  --ocean: #146b9e;
+  --ocean-light: #4fa8d8;
+  --sand: #f4ead3;
+  --text: #1c2733;
+  --good: #1e9e5a;
+  --fair: #d4a017;
+  --poor: #c0492c;
+  --card-bg: #ffffff;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: linear-gradient(180deg, var(--ocean-dark) 0%, var(--ocean) 220px, var(--sand) 220px);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+header {
+  padding: 32px 24px 16px;
+  color: white;
+  text-align: center;
+}
+header h1 { margin: 0; font-size: 2rem; }
+.tagline { opacity: 0.85; margin: 4px 0 0; }
+
+main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 16px 20px 60px;
+}
+
+.hidden { display: none !important; }
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+}
+button.primary { background: var(--ocean-dark); color: white; }
+button.primary:hover { background: var(--ocean); }
+button.secondary { background: #e4e4e4; color: var(--text); }
+button.danger { background: var(--poor); color: white; }
+button.link-btn { background: none; color: var(--ocean-dark); text-decoration: underline; padding: 4px 0; margin-bottom: 12px; }
+
+.spot-list {
+  display: grid;
+  gap: 14px;
+}
+
+.spot-card {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.spot-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.14); }
+.spot-card .name { font-weight: 600; font-size: 1.1rem; }
+.spot-card .coords { color: #667; font-size: 0.85rem; }
+.spot-card .now-score {
+  font-size: 1.4rem;
+  font-weight: 700;
+  min-width: 52px;
+  text-align: center;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: white;
+}
+
+.empty-state {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  padding: 32px;
+  text-align: center;
+  color: #667;
+}
+
+form { background: var(--card-bg); border-radius: var(--radius); padding: 20px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; }
+.form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; font-weight: 500; }
+.form-grid label.full-width { grid-column: 1 / -1; }
+.form-grid .divider { border-top: 1px solid #eee; padding-top: 14px; margin-top: 4px; font-size: 1rem; }
+.form-grid input { padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font: inherit; }
+.hint { font-weight: 400; color: #778; font-size: 0.78rem; }
+.form-actions { margin-top: 18px; display: flex; gap: 10px; }
+
+#detail-content { background: var(--card-bg); border-radius: var(--radius); padding: 20px; }
+
+.detail-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+.detail-header h2 { margin: 0; }
+.edit-btn { background: #eee; font-size: 0.85rem; padding: 6px 12px; }
+
+.buoy-box {
+  background: #eef6fb;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 14px 0;
+  font-size: 0.9rem;
+}
+.buoy-box .label { font-weight: 600; color: var(--ocean-dark); }
+.error-box {
+  background: #fdecea;
+  color: #8a2c1c;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 14px 0;
+  font-size: 0.9rem;
+}
+
+.day-block { margin-top: 22px; }
+.day-block h3 { margin-bottom: 8px; color: var(--ocean-dark); }
+
+.hours-row {
+  display: flex;
+  overflow-x: auto;
+  gap: 8px;
+  padding-bottom: 6px;
+}
+
+.hour-card {
+  flex: 0 0 auto;
+  min-width: 92px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: center;
+  color: white;
+  font-size: 0.78rem;
+}
+.hour-card .time { font-weight: 600; font-size: 0.82rem; margin-bottom: 4px; }
+.hour-card .score-num { font-size: 1.3rem; font-weight: 700; }
+.hour-card .label { text-transform: uppercase; letter-spacing: 0.03em; font-size: 0.68rem; margin-bottom: 4px; }
+.hour-card .meta { opacity: 0.9; margin-top: 4px; line-height: 1.5; }
+
+.score-epic { background: #0f7a3d; }
+.score-good { background: #1e9e5a; }
+.score-fair { background: #d4a017; }
+.score-poor { background: #c0492c; }
+.score-flat { background: #7a828c; }
+
+footer {
+  text-align: center;
+  padding: 20px;
+  color: #667;
+  font-size: 0.8rem;
+}

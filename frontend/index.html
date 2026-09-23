@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Surf Forecast</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>🌊 Surf Forecast</h1>
+    <p class="tagline">Real NOAA buoy + swell model data, scored for your spot.</p>
+  </header>
+
+  <main>
+    <section id="spot-list-section">
+      <div class="section-header">
+        <h2>Your Spots</h2>
+        <button id="add-spot-btn" class="primary">+ Add Spot</button>
+      </div>
+      <div id="spot-list" class="spot-list"></div>
+    </section>
+
+    <section id="detail-section" class="hidden">
+      <button id="back-btn" class="link-btn">&larr; Back to spots</button>
+      <div id="detail-content"></div>
+    </section>
+
+    <section id="form-section" class="hidden">
+      <h2 id="form-title">Add a Surf Spot</h2>
+      <form id="spot-form">
+        <div class="form-grid">
+          <label>Spot name
+            <input type="text" name="name" required placeholder="e.g. Steamer Lane, Santa Cruz">
+          </label>
+          <label>Latitude
+            <input type="number" step="0.0001" name="lat" required placeholder="36.9513">
+          </label>
+          <label>Longitude
+            <input type="number" step="0.0001" name="lon" required placeholder="-122.0247">
+          </label>
+
+          <label class="full-width divider">Wave preferences <span class="hint">(tune these per spot &mdash; defaults are reasonable beginner settings)</span></label>
+
+          <label>Beach facing direction (&deg;, swell source)
+            <input type="number" name="facing_direction" min="0" max="359" value="270">
+            <span class="hint">Compass direction swell needs to come FROM to hit this spot well. 270 = swell from the West.</span>
+          </label>
+          <label>Swell angle tolerance (&deg;)
+            <input type="number" name="swell_window_deg" min="1" max="180" value="45">
+            <span class="hint">How far off "facing direction" the swell can be and still work.</span>
+          </label>
+
+          <label>Min good swell period (s)
+            <input type="number" name="min_good_period_s" step="0.5" value="8">
+          </label>
+          <label>Ideal swell period (s)
+            <input type="number" name="ideal_period_s" step="0.5" value="12">
+          </label>
+
+          <label>Min good swell height (m)
+            <input type="number" name="min_good_height_m" step="0.1" value="0.5">
+          </label>
+          <label>Ideal swell height (m)
+            <input type="number" name="ideal_height_m" step="0.1" value="1.5">
+          </label>
+          <label>Max good swell height (m)
+            <input type="number" name="max_good_height_m" step="0.1" value="3.0">
+          </label>
+
+          <label>Max acceptable onshore wind (km/h)
+            <input type="number" name="max_good_wind_kmh" step="1" value="15">
+          </label>
+          <label>Onshore wind angle tolerance (&deg;)
+            <input type="number" name="onshore_window_deg" min="1" max="180" value="90">
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="primary">Save Spot</button>
+          <button type="button" id="cancel-form-btn" class="secondary">Cancel</button>
+          <button type="button" id="delete-spot-btn" class="danger hidden">Delete Spot</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <footer>
+    <p>Data: NOAA NDBC buoys (live observations) &middot; Open-Meteo Marine/Weather (NOAA/ECMWF wave &amp; wind models)</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

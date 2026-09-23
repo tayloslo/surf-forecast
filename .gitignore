@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+ndbc_stations_raw.txt
+.DS_Store
