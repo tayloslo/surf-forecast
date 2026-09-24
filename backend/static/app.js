@@ -1,6 +1,6 @@
 const API_BASE = "";
 
-const map = L.map("map", { zoomControl: true }).setView([15, 0], 2);
+const map = L.map("map", { zoomControl: true }).setView([47.7, -123.8], 8);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   maxZoom: 18,
@@ -88,6 +88,15 @@ async function openDetail(spotId) {
     html += `<div class="buoy-box error-msg">${spot.buoy_error}</div>`;
   }
 
+  if (spot.secondary_observation) {
+    const s = spot.secondary_observation;
+    html += `<div class="buoy-box">
+      <h4>Local wind ${s.station_id}</h4>
+      <div>Wind: ${s.wind_speed_ms ?? "?"} m/s @ ${s.wind_dir_deg ?? "?"}&deg; (gust ${s.gust_ms ?? "?"} m/s)</div>
+      <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Observed ${s.observed_at}</div>
+    </div>`;
+  }
+
   if (spot.forecast_error) {
     html += `<p class="error-msg">${spot.forecast_error}</p>`;
   } else if (spot.forecast) {
@@ -100,7 +109,10 @@ async function openDetail(spotId) {
         html += `<div class="hour-row">
           <span class="hour-time">${fmtTime(h.time)}</span>
           <span class="hour-score-dot spot-dot-${cls}"></span>
-          <span class="hour-detail">${h.swell_height_m?.toFixed(1) ?? "?"}m @ ${h.swell_period_s?.toFixed(0) ?? "?"}s, wind ${h.wind_speed_kmh?.toFixed(0) ?? "?"}km/h</span>
+          <span class="hour-detail">${h.model === "fetch_wind"
+            ? `wind ${h.wind_speed_kmh?.toFixed(0) ?? "?"}km/h @ ${h.wind_dir_deg?.toFixed(0) ?? "?"}\u00b0 (fetch-driven wave)`
+            : `${h.swell_height_m?.toFixed(1) ?? "?"}m @ ${h.swell_period_s?.toFixed(0) ?? "?"}s, wind ${h.wind_speed_kmh?.toFixed(0) ?? "?"}km/h`
+          }</span>
           <span class="hour-label">${h.score}</span>
         </div>`;
       });

@@ -18,8 +18,11 @@ import time
 import asyncio
 
 from spots_data import SPOTS, SPOTS_BY_ID
-from noaa_client import fetch_marine_forecast, find_working_nearest_buoy, fetch_buoy_observation
-from scoring import score_hour, label_for_score
+from noaa_client import (
+    fetch_marine_forecast, find_working_nearest_buoy, fetch_buoy_observation,
+    fetch_tides_currents_wind,
+)
+from scoring import score_hour, score_hour_fetch_wind, label_for_score
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("surf-api")
@@ -58,6 +61,22 @@ async def _fetch_with_retry(spot, days: int, attempts: int = 4):
         await asyncio.sleep(wait)
 
 
+async def _fetch_upwind_with_retry(spot, days: int, attempts: int = 4):
+    """Same throttled/retried fetch as _fetch_with_retry, but for a spot's
+    upwind reference point rather than the spot itself (fetch_wind model)."""
+    for attempt in range(attempts):
+        async with _FETCH_SEMAPHORE:
+            try:
+                return await fetch_marine_forecast(spot.upwind_lat, spot.upwind_lon, days=days)
+            except Exception as e:
+                if attempt == attempts - 1:
+                    raise
+                is_429 = "429" in str(e)
+                wait = (2 ** attempt) if is_429 else 0.5
+                log.warning("upwind fetch retry %s/%s for spot %s (%s)", attempt + 1, attempts, spot.id, e)
+        await asyncio.sleep(wait)
+
+
 async def _get_scored_forecast(spot, days: int = 7) -> dict:
     cached = _CACHE.get(spot.id)
     now = time.time()
@@ -65,7 +84,27 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
         return cached["data"]
 
     forecast = await _fetch_with_retry(spot, days)
-    scored_hours = [score_hour(spot, h) for h in forecast["hours"]]
+
+    if getattr(spot, "scoring_model", "swell") == "fetch_wind":
+        # Strait/fetch-limited spot: score local wind, using the upwind
+        # reference point's wind over the preceding few hours as a
+        # leading indicator of fetch building down-strait.
+        upwind_forecast = None
+        if spot.upwind_lat is not None and spot.upwind_lon is not None:
+            try:
+                upwind_forecast = await _fetch_upwind_with_retry(spot, days)
+            except Exception:
+                log.exception("upwind forecast fetch failed for spot %s", spot.id)
+
+        upwind_hours = upwind_forecast["hours"] if upwind_forecast else []
+        scored_hours = []
+        for i, h in enumerate(forecast["hours"]):
+            # Look back a few hours at the upwind point for sustained fetch.
+            window = upwind_hours[max(0, i - 6):i + 1] if upwind_hours else []
+            scored_hours.append(score_hour_fetch_wind(spot, h, upwind_hours=window))
+    else:
+        scored_hours = [score_hour(spot, h) for h in forecast["hours"]]
+
     for sh in scored_hours:
         sh["label"] = label_for_score(sh["score"])
     data = {
@@ -141,7 +180,12 @@ async def spot_detail(spot_id: int):
         result["forecast_error"] = f"Could not load forecast right now: {e}"
 
     try:
-        working_id, obs = await find_working_nearest_buoy(spot.lat, spot.lon)
+        if spot.nearest_buoy_id:
+            obs = await fetch_buoy_observation(spot.nearest_buoy_id)
+        else:
+            obs = None
+        if not obs:
+            _, obs = await find_working_nearest_buoy(spot.lat, spot.lon)
         if obs:
             result["buoy_observation"] = obs
         else:
@@ -149,6 +193,18 @@ async def spot_detail(spot_id: int):
     except Exception:
         log.exception("buoy fetch failed for spot %s", spot_id)
         result["buoy_error"] = "No nearby NOAA buoy currently has live data."
+
+    # Some spots (e.g. Elwha) have a second live reference point - for
+    # Elwha this is the Port Angeles NOAA tide station, the closest live
+    # wind observation to the spot itself (no NDBC wave buoy sits there).
+    secondary_id = getattr(spot, "secondary_buoy_id", None)
+    if secondary_id:
+        try:
+            sec_obs = await fetch_tides_currents_wind(secondary_id)
+            if sec_obs:
+                result["secondary_observation"] = sec_obs
+        except Exception:
+            log.exception("secondary buoy fetch failed for spot %s", spot_id)
 
     return result
 

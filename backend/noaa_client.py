@@ -150,3 +150,35 @@ async def find_working_nearest_buoy(lat: float, lon: float, candidates: int = 6)
         if obs:
             return station["id"], obs
     return None, None
+
+
+async def fetch_tides_currents_wind(station_id: str) -> dict | None:
+    """Live wind observation from a NOAA CO-OPS (Tides & Currents) station,
+    used for spots near a tide gauge but not right next to an NDBC wave
+    buoy (e.g. Elwha, WA - nearest live wind is the Port Angeles tide
+    station, station 9444090). Different API/format than NDBC realtime2."""
+    url = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+    params = {
+        "station": station_id, "product": "wind", "units": "metric",
+        "time_zone": "gmt", "format": "json", "date": "latest",
+    }
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        try:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+        except httpx.HTTPError:
+            return None
+    try:
+        data = resp.json().get("data")
+        if not data:
+            return None
+        row = data[-1]
+        return {
+            "station_id": station_id,
+            "observed_at": row.get("t"),
+            "wind_speed_ms": float(row["s"]) if row.get("s") not in (None, "") else None,
+            "wind_dir_deg": float(row["d"]) if row.get("d") not in (None, "") else None,
+            "gust_ms": float(row["g"]) if row.get("g") not in (None, "") else None,
+        }
+    except (KeyError, ValueError, TypeError):
+        return None

@@ -12,6 +12,85 @@ by consumer surf-forecast sites for spots without a dedicated buoy.
 from database import Spot
 
 
+# ---------------------------------------------------------------------------
+# Fetch-limited wind wave scoring (for strait/inlet spots like Elwha, WA)
+#
+# Elwha sits deep inside the Strait of Juan de Fuca, ~50 miles from the open
+# Pacific. Groundswell cannot survive that distance up a narrow strait -
+# Open-Meteo wave model confirms this, returning near-zero swell energy
+# there year-round. What actually makes this spot work is a LOCAL,
+# fetch-limited wind wave: sustained strong westerly wind blowing the length
+# of the strait piles up short-period chop as it travels down-strait, and
+# the wave grows with both wind speed and how long/far it has had to blow
+# (fetch). This is a fundamentally different mechanism than swell hitting a
+# reef, so it needs its own scoring path rather than tuned swell parameters.
+# ---------------------------------------------------------------------------
+
+def score_hour_fetch_wind(spot: Spot, hour: dict, upwind_hours: list[dict] | None = None) -> dict:
+    """Score one hourly forecast entry for a fetch-limited strait spot.
+
+    `hour` is this spots own forecast hour (local wind at Elwha).
+    `upwind_hours` is the corresponding slice of forecast hours from the
+    upwind reference point (Neah Bay, at the straits mouth) - sustained
+    westerly wind there several hours earlier is a leading indicator that
+    fetch is building and about to arrive, since wind-driven chop takes
+    time to propagate down-strait.
+    """
+    wind_speed = hour["wind_speed_kmh"] or 0.0
+    wind_dir = hour["wind_dir_deg"]
+
+    # --- Direction fitness: only wind blowing roughly DOWN the strait
+    # (from the west, i.e. from Neah Bay toward Elwha) builds a usable
+    # wave here. Wind from the east (down-strait, blowing the "wrong way")
+    # or from land kills it, regardless of speed.
+    if wind_dir is None:
+        dir_fitness = 0.5
+    else:
+        off_angle = _angle_diff(wind_dir, spot.facing_direction)
+        dir_fitness = max(0.0, 1.0 - (off_angle / spot.swell_window_deg))
+
+    # --- Speed/fetch fitness: wave size scales with wind speed once it
+    # has been blowing long enough to build fetch. Use a triangular
+    # fitness the same way we would use swell height elsewhere - too light
+    # and there is no wave, too strong and it is a blown-out mess. Uses
+    # dedicated fetch_* thresholds (km/h) rather than the swell height/
+    # period fields, since those are a different unit/mechanism entirely.
+    speed_fitness = _triangular_fitness(
+        wind_speed, spot.fetch_min_wind_kmh, spot.fetch_ideal_wind_kmh, spot.fetch_max_wind_kmh
+    )
+
+    # --- Sustained-fetch bonus: check whether wind at the upwind reference
+    # (Neah Bay) has ALSO been blowing from a usable direction for the
+    # preceding several hours. A gust that just started has not built fetch
+    # yet; sustained wind over time has. This is the piece a simple
+    # single-point wind score would miss entirely for this kind of spot.
+    fetch_bonus = 1.0
+    if upwind_hours:
+        aligned = 0
+        for uh in upwind_hours:
+            ud = uh.get("wind_dir_deg")
+            uspeed = uh.get("wind_speed_kmh") or 0.0
+            if ud is not None and _angle_diff(ud, spot.facing_direction) < spot.swell_window_deg and uspeed >= spot.fetch_min_wind_kmh:
+                aligned += 1
+        fetch_bonus = 0.5 + 0.5 * min(1.0, aligned / max(len(upwind_hours), 1))
+
+    composite = (dir_fitness ** 1.2) * speed_fitness * fetch_bonus
+    score_10 = round(max(0.0, min(1.0, composite)) * 10, 1)
+
+    return {
+        "time": hour["time"],
+        "score": score_10,
+        "wind_speed_kmh": wind_speed,
+        "wind_dir_deg": wind_dir,
+        "components": {
+            "direction_fitness": round(dir_fitness, 2),
+            "speed_fitness": round(speed_fitness, 2),
+            "fetch_bonus": round(fetch_bonus, 2),
+        },
+        "model": "fetch_wind",
+    }
+
+
 def _angle_diff(a: float, b: float) -> float:
     """Smallest difference between two compass bearings, 0-180."""
     d = abs(a - b) % 360
