@@ -1,6 +1,6 @@
 const API_BASE = "";
 
-const map = L.map("map", { zoomControl: true }).setView([36.5, -121.0], 7);
+const map = L.map("map", { zoomControl: true }).setView([15, 0], 2);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   maxZoom: 18,
