@@ -1,0 +1,186 @@
+[
+  {
+    "name": "The Hook",
+    "lat": 36.9593054,
+    "lon": -121.9643858,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "Bombora",
+    "lat": 36.9713534,
+    "lon": -121.9439789,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "First Peak",
+    "lat": 36.9545866,
+    "lon": -121.9709742,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "Little Wind-an-Sea",
+    "lat": 36.9540996,
+    "lon": -121.9767453,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "New Brighton Reef",
+    "lat": 36.9755268,
+    "lon": -121.940728,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "Second Peak",
+    "lat": 36.9555205,
+    "lon": -121.9702184,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "Sewer Peak",
+    "lat": 36.9535308,
+    "lon": -121.9728983,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "Shark's Cove",
+    "lat": 36.9609104,
+    "lon": -121.9624799,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "Suicide's",
+    "lat": 36.9539085,
+    "lon": -121.9748546,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "Toes Over",
+    "lat": 36.9710845,
+    "lon": -121.9486795,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "Trees",
+    "lat": 36.9669527,
+    "lon": -121.956576,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "38th",
+    "lat": 36.9574939,
+    "lon": -121.9677716,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "Private's",
+    "lat": 36.9632137,
+    "lon": -121.960258,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "osm"
+  },
+  {
+    "name": "Malibu (Surfrider Beach)",
+    "lat": 34.0367,
+    "lon": -118.6786,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "curated"
+  },
+  {
+    "name": "Huntington Beach Pier",
+    "lat": 33.6553,
+    "lon": -118.0053,
+    "facing_direction": 210,
+    "swell_window_deg": 70,
+    "source": "curated"
+  },
+  {
+    "name": "Trestles (Lower)",
+    "lat": 33.3825,
+    "lon": -117.5931,
+    "facing_direction": 225,
+    "swell_window_deg": 60,
+    "source": "curated"
+  },
+  {
+    "name": "Mavericks",
+    "lat": 37.4914,
+    "lon": -122.5006,
+    "facing_direction": 280,
+    "swell_window_deg": 50,
+    "source": "curated"
+  },
+  {
+    "name": "Rincon",
+    "lat": 34.3728,
+    "lon": -119.4761,
+    "facing_direction": 190,
+    "swell_window_deg": 55,
+    "source": "curated"
+  },
+  {
+    "name": "Steamer Lane",
+    "lat": 36.9513,
+    "lon": -122.0247,
+    "facing_direction": 200,
+    "swell_window_deg": 60,
+    "source": "curated"
+  },
+  {
+    "name": "Ocean Beach, SF",
+    "lat": 37.7594,
+    "lon": -122.5107,
+    "facing_direction": 260,
+    "swell_window_deg": 70,
+    "source": "curated"
+  },
+  {
+    "name": "Swami's, Encinitas",
+    "lat": 33.0303,
+    "lon": -117.2946,
+    "facing_direction": 220,
+    "swell_window_deg": 60,
+    "source": "curated"
+  },
+  {
+    "name": "Windansea",
+    "lat": 32.8236,
+    "lon": -117.2789,
+    "facing_direction": 230,
+    "swell_window_deg": 60,
+    "source": "curated"
+  },
+  {
+    "name": "Blacks Beach",
+    "lat": 32.8894,
+    "lon": -117.2531,
+    "facing_direction": 230,
+    "swell_window_deg": 65,
+    "source": "curated"
+  }
+]
