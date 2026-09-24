@@ -72,6 +72,11 @@ SPOTS = [
         "upwind_lat": 48.493, "upwind_lon": -124.727,
         "nearest_buoy_id": "46087",
         "secondary_buoy_id": "9444090",
+        # Local wave reading = NDBC buoy 46267, Angeles Point, only ~5km
+        # from the spot. No wind sensor onboard, so it can't replace 46087
+        # for wind+wave calibration, but its live wave height/period is
+        # the closest real wave observation to Elwha available.
+        "local_wave_buoy_id": "46267",
         "fetch_min_wind_mph": 12.4, "fetch_ideal_wind_mph": 21.7, "fetch_max_wind_mph": 34.2,
     },
     # Freshwater Bay, WA - similar mechanism to Elwha, a west-facing
@@ -84,6 +89,9 @@ SPOTS = [
         "upwind_lat": 48.493, "upwind_lon": -124.727,
         "nearest_buoy_id": "46087",
         "secondary_buoy_id": "9444090",
+        # Same nearby wave buoy as Elwha (~11km away), still the closest
+        # live wave observation available for this stretch of the strait.
+        "local_wave_buoy_id": "46267",
         "fetch_min_wind_mph": 11.2, "fetch_ideal_wind_mph": 19.9, "fetch_max_wind_mph": 31.1,
     },
     # Point Wilson, Port Townsend - sits at the mouth of Admiralty Inlet,

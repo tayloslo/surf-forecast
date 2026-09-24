@@ -97,6 +97,15 @@ async function openDetail(spotId) {
     </div>`;
   }
 
+  if (spot.local_wave_observation) {
+    const w = spot.local_wave_observation;
+    html += `<div class="buoy-box">
+      <h4>Local wave ${w.station_id}</h4>
+      <div>Wave height: ${w.wave_height_ft ?? "?"} ft &middot; Period: ${w.dominant_period_s ?? "?"} s</div>
+      <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Observed ${w.observed_at}</div>
+    </div>`;
+  }
+
   if (spot.historical_profile_summary) {
     const hp = spot.historical_profile_summary;
     html += `<div class="buoy-box" style="opacity:0.85;">

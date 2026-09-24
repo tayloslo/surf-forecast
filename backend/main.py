@@ -249,6 +249,19 @@ async def spot_detail(spot_id: int):
         except Exception:
             log.exception("secondary buoy fetch failed for spot %s", spot_id)
 
+    # Some spots (e.g. Elwha, Freshwater Bay) have a nearby NDBC buoy that
+    # reports live wave height/period but has no wind sensor onboard, so
+    # it can't serve as the wind+wave calibration reference (nearest_buoy_id)
+    # but its wave reading is still the closest real observation available.
+    local_wave_id = getattr(spot, "local_wave_buoy_id", None)
+    if local_wave_id:
+        try:
+            local_wave_obs = await fetch_buoy_observation(local_wave_id)
+            if local_wave_obs:
+                result["local_wave_observation"] = local_wave_obs
+        except Exception:
+            log.exception("local wave buoy fetch failed for spot %s", spot_id)
+
     # For fetch_wind spots, surface the historical calibration summary
     # (max period actually seen at the reference buoy, and how many
     # analog wind/wave data points back the current forecast) so the

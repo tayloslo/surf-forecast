@@ -38,6 +38,12 @@ DEFAULT_PREFS = dict(
     # Optional second live buoy for the detail view (fetch_wind spots
     # benefit from showing both the upwind mouth buoy and a local reading).
     secondary_buoy_id=None,
+    # Optional nearby wave-only NDBC buoy (no wind sensor) that sits much
+    # closer to the spot than nearest_buoy_id - used only for the live
+    # wave height/period reading shown in the detail view. nearest_buoy_id
+    # stays the upwind wind+wave reference used for scoring/calibration,
+    # since that pairing is what the fetch-wind model needs.
+    local_wave_buoy_id=None,
 )
 
 
