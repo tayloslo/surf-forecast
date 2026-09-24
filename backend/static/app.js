@@ -80,8 +80,8 @@ async function openDetail(spotId) {
     const b = spot.buoy_observation;
     html += `<div class="buoy-box">
       <h4>Live buoy ${b.station_id}</h4>
-      <div>Wave height: ${b.wave_height_m ?? "?"} m &middot; Period: ${b.dominant_period_s ?? "?"} s</div>
-      <div>Wind: ${b.wind_speed_ms ?? "?"} m/s @ ${b.wind_dir_deg ?? "?"}&deg;</div>
+      <div>Wave height: ${b.wave_height_ft ?? "?"} ft &middot; Period: ${b.dominant_period_s ?? "?"} s</div>
+      <div>Wind: ${b.wind_speed_mph ?? "?"} mph @ ${b.wind_dir_deg ?? "?"}&deg;</div>
       <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Observed ${b.observed_at}</div>
     </div>`;
   } else if (spot.buoy_error) {
@@ -92,8 +92,19 @@ async function openDetail(spotId) {
     const s = spot.secondary_observation;
     html += `<div class="buoy-box">
       <h4>Local wind ${s.station_id}</h4>
-      <div>Wind: ${s.wind_speed_ms ?? "?"} m/s @ ${s.wind_dir_deg ?? "?"}&deg; (gust ${s.gust_ms ?? "?"} m/s)</div>
+      <div>Wind: ${s.wind_speed_mph ?? "?"} mph @ ${s.wind_dir_deg ?? "?"}&deg; (gust ${s.gust_mph ?? "?"} mph)</div>
       <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Observed ${s.observed_at}</div>
+    </div>`;
+  }
+
+  if (spot.historical_profile_summary) {
+    const hp = spot.historical_profile_summary;
+    html += `<div class="buoy-box" style="opacity:0.85;">
+      <h4>Historical calibration (buoy ${hp.reference_buoy_id})</h4>
+      <div>Max swell period seen in last ~45 days: ${hp.max_period_s_observed ?? "?"} s
+        (confirms groundswell doesn't reach this far into the strait)</div>
+      <div>Forecast wind speeds are compared against ${hp.analog_buckets} real historical
+        wind-speed buckets from this buoy's own wind/wave record.</div>
     </div>`;
   }
 
@@ -106,13 +117,19 @@ async function openDetail(spotId) {
       // Show every 3rd hour to keep it scannable
       hours.filter((_, i) => i % 3 === 0).forEach((h) => {
         const cls = scoreClass(h.label);
+        let detail;
+        if (h.model === "fetch_wind") {
+          detail = `wind ${h.wind_speed_mph?.toFixed(0) ?? "?"}mph @ ${h.wind_dir_deg?.toFixed(0) ?? "?"}\u00b0 (fetch-driven wave)`;
+          if (h.historical_wave_height_ft != null) {
+            detail += ` &middot; similar past wind produced ~${h.historical_wave_height_ft.toFixed(1)}ft (${h.historical_analog_count} analogs)`;
+          }
+        } else {
+          detail = `${h.swell_height_ft?.toFixed(1) ?? "?"}ft @ ${h.swell_period_s?.toFixed(0) ?? "?"}s, wind ${h.wind_speed_mph?.toFixed(0) ?? "?"}mph`;
+        }
         html += `<div class="hour-row">
           <span class="hour-time">${fmtTime(h.time)}</span>
           <span class="hour-score-dot spot-dot-${cls}"></span>
-          <span class="hour-detail">${h.model === "fetch_wind"
-            ? `wind ${h.wind_speed_kmh?.toFixed(0) ?? "?"}km/h @ ${h.wind_dir_deg?.toFixed(0) ?? "?"}\u00b0 (fetch-driven wave)`
-            : `${h.swell_height_m?.toFixed(1) ?? "?"}m @ ${h.swell_period_s?.toFixed(0) ?? "?"}s, wind ${h.wind_speed_kmh?.toFixed(0) ?? "?"}km/h`
-          }</span>
+          <span class="hour-detail">${detail}</span>
           <span class="hour-label">${h.score}</span>
         </div>`;
       });

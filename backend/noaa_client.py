@@ -10,6 +10,16 @@ Live data sources:
    forecasts for any lat/lon, built on NOAA's operational wave models
    (GFS-Wave / WaveWatch III) and ECMWF/GFS for wind. Free, no API key,
    several days out. This is what actually powers the forecast/scoring.
+
+All values in this module are normalized to US units (feet, mph) before
+being returned, regardless of the native unit of the upstream source:
+  - Open-Meteo: requested directly in imperial (length_unit=imperial,
+    wind_speed_unit=mph), since it supports that natively.
+  - NDBC realtime2: always reports metric (m/s, meters) with no unit
+    option, so we convert manually.
+  - NOAA CO-OPS: units=english on this API returns KNOTS for wind, not
+    mph (a nautical-API quirk), so we request metric and convert
+    ourselves to guarantee mph.
 """
 import httpx
 import json
@@ -22,6 +32,9 @@ with open(STATIONS_PATH) as f:
 
 HTTP_TIMEOUT = 12.0
 
+MS_TO_MPH = 2.23694
+M_TO_FT = 3.28084
+
 
 def find_nearest_buoy(lat: float, lon: float, max_results: int = 1):
     """Simple flat-earth nearest-neighbor search over the NDBC station list.
@@ -32,6 +45,42 @@ def find_nearest_buoy(lat: float, lon: float, max_results: int = 1):
 
     ranked = sorted(_STATIONS, key=dist2)
     return ranked[:max_results]
+
+
+def _parse_realtime2_line(station_id: str, line: str) -> dict | None:
+    """Parse one row of an NDBC realtime2 text file into a normalized
+    (US units) observation dict, or None if the row has no usable wave
+    height. Shared by the "latest observation" and "historical" paths
+    since both read the same 45-day realtime2 file/format."""
+    parts = line.split()
+    if len(parts) < 12:
+        return None
+    try:
+        yr, mo, dy, hr, mn = parts[0:5]
+        wdir, wspd, gst, wvht, dpd, apd, mwd = parts[5:12]
+
+        def num(v):
+            return None if v in ("MM", "999", "9999") else float(v)
+
+        wave_height_m = num(wvht)
+        if wave_height_m is None:
+            return None
+
+        wind_speed_ms = num(wspd)
+        gst_ms = num(gst)
+        return {
+            "station_id": station_id.upper(),
+            "observed_at": f"{yr}-{mo}-{dy}T{hr}:{mn}:00Z",
+            "wind_dir_deg": num(wdir),
+            "wind_speed_mph": round(wind_speed_ms * MS_TO_MPH, 1) if wind_speed_ms is not None else None,
+            "gust_mph": round(gst_ms * MS_TO_MPH, 1) if gst_ms is not None else None,
+            "wave_height_ft": round(wave_height_m * M_TO_FT, 1),
+            "dominant_period_s": num(dpd),
+            "avg_period_s": num(apd),
+            "wave_dir_deg": num(mwd),
+        }
+    except ValueError:
+        return None
 
 
 async def fetch_buoy_observation(station_id: str) -> dict | None:
@@ -50,44 +99,44 @@ async def fetch_buoy_observation(station_id: str) -> dict | None:
     if not lines:
         return None
 
-    # Columns: YY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES ATMP WTMP DEWP VIS PTDY TIDE
     # Walk rows newest-first and take the first one with usable wave data,
     # since gusts/wind often report before wave sensors on a given tick.
     for line in lines[:12]:
-        parts = line.split()
-        if len(parts) < 12:
-            continue
-        try:
-            yr, mo, dy, hr, mn = parts[0:5]
-            wdir, wspd, gst, wvht, dpd, apd, mwd = parts[5:12]
-
-            def num(v):
-                return None if v in ("MM", "999", "9999") else float(v)
-
-            wave_height = num(wvht)
-            if wave_height is None:
-                continue
-
-            return {
-                "station_id": station_id.upper(),
-                "observed_at": f"{yr}-{mo}-{dy}T{hr}:{mn}:00Z",
-                "wind_dir_deg": num(wdir),
-                "wind_speed_ms": num(wspd),
-                "gust_ms": num(gst),
-                "wave_height_m": wave_height,
-                "dominant_period_s": num(dpd),
-                "avg_period_s": num(apd),
-                "wave_dir_deg": num(mwd),
-            }
-        except ValueError:
-            continue
+        obs = _parse_realtime2_line(station_id, line)
+        if obs:
+            return obs
     return None
+
+
+async def fetch_historical_observations(station_id: str) -> list[dict]:
+    """Pull the full ~45-day realtime2 archive for a station (NDBC keeps a
+    rolling window, no separate 'historical' endpoint needed for this
+    horizon) and return every row with usable wind + wave data. This is
+    the raw material for calibrating the fetch-wind model: pairing what
+    the wind was actually doing with what wave height that produced at
+    the SAME buoy, so a future forecast wind can be compared against real
+    past analogs rather than a hand-tuned guess."""
+    url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id.lower()}.txt"
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        try:
+            resp = await client.get(url)
+            resp.raise_for_status()
+        except httpx.HTTPError:
+            return []
+
+    lines = [l for l in resp.text.splitlines() if l and not l.startswith("#")]
+    rows = []
+    for line in lines:
+        obs = _parse_realtime2_line(station_id, line)
+        if obs and obs["wind_speed_mph"] is not None and obs["wind_dir_deg"] is not None:
+            rows.append(obs)
+    return rows
 
 
 async def fetch_marine_forecast(lat: float, lon: float, days: int = 7) -> dict:
     """Hourly swell + wind forecast for a point, from Open-Meteo (wraps
-    NOAA/ECMWF wave + atmospheric models). Returns aligned lists of hourly
-    values, merged from the marine and weather endpoints."""
+    NOAA/ECMWF wave + atmospheric models). Requests US units directly
+    from the API (feet, mph) so no manual conversion is needed here."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         marine_resp, wind_resp = await client.get(
             "https://marine-api.open-meteo.com/v1/marine",
@@ -96,6 +145,7 @@ async def fetch_marine_forecast(lat: float, lon: float, days: int = 7) -> dict:
                 "longitude": lon,
                 "hourly": "wave_height,wave_direction,wave_period,"
                           "swell_wave_height,swell_wave_period,swell_wave_direction",
+                "length_unit": "imperial",
                 "timezone": "auto",
                 "forecast_days": days,
             },
@@ -105,7 +155,7 @@ async def fetch_marine_forecast(lat: float, lon: float, days: int = 7) -> dict:
                 "latitude": lat,
                 "longitude": lon,
                 "hourly": "wind_speed_10m,wind_direction_10m,wind_gusts_10m",
-                "wind_speed_unit": "kmh",
+                "wind_speed_unit": "mph",
                 "timezone": "auto",
                 "forecast_days": days,
             },
@@ -126,14 +176,14 @@ async def fetch_marine_forecast(lat: float, lon: float, days: int = 7) -> dict:
             break
         hours.append({
             "time": times[i],
-            "wave_height_m": marine["wave_height"][i],
+            "wave_height_ft": marine["wave_height"][i],
             "wave_period_s": marine["wave_period"][i],
             "wave_dir_deg": marine["wave_direction"][i],
-            "swell_height_m": marine["swell_wave_height"][i],
+            "swell_height_ft": marine["swell_wave_height"][i],
             "swell_period_s": marine["swell_wave_period"][i],
             "swell_dir_deg": marine["swell_wave_direction"][i],
-            "wind_speed_kmh": wind["wind_speed_10m"][i],
-            "wind_gust_kmh": wind["wind_gusts_10m"][i],
+            "wind_speed_mph": wind["wind_speed_10m"][i],
+            "wind_gust_mph": wind["wind_gusts_10m"][i],
             "wind_dir_deg": wind["wind_direction_10m"][i],
         })
     return {"lat": lat, "lon": lon, "fetched_at": datetime.now(timezone.utc).isoformat(), "hours": hours}
@@ -156,7 +206,9 @@ async def fetch_tides_currents_wind(station_id: str) -> dict | None:
     """Live wind observation from a NOAA CO-OPS (Tides & Currents) station,
     used for spots near a tide gauge but not right next to an NDBC wave
     buoy (e.g. Elwha, WA - nearest live wind is the Port Angeles tide
-    station, station 9444090). Different API/format than NDBC realtime2."""
+    station, station 9444090). Different API/format than NDBC realtime2.
+    Requested in metric and converted to mph ourselves - CO-OPS's
+    units=english mode actually returns knots for wind, not mph."""
     url = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
     params = {
         "station": station_id, "product": "wind", "units": "metric",
@@ -173,12 +225,14 @@ async def fetch_tides_currents_wind(station_id: str) -> dict | None:
         if not data:
             return None
         row = data[-1]
+        speed_ms = float(row["s"]) if row.get("s") not in (None, "") else None
+        gust_ms = float(row["g"]) if row.get("g") not in (None, "") else None
         return {
             "station_id": station_id,
             "observed_at": row.get("t"),
-            "wind_speed_ms": float(row["s"]) if row.get("s") not in (None, "") else None,
+            "wind_speed_mph": round(speed_ms * MS_TO_MPH, 1) if speed_ms is not None else None,
             "wind_dir_deg": float(row["d"]) if row.get("d") not in (None, "") else None,
-            "gust_ms": float(row["g"]) if row.get("g") not in (None, "") else None,
+            "gust_mph": round(gust_ms * MS_TO_MPH, 1) if gust_ms is not None else None,
         }
     except (KeyError, ValueError, TypeError):
         return None

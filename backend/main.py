@@ -7,6 +7,10 @@ Endpoints:
   GET  /api/health
 
 Run: uvicorn main:app --reload --port 8420
+
+All forecast/observation values returned by this API are US units
+(feet, mph) - see noaa_client.py and scoring.py for where the unit
+normalization happens.
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -20,9 +24,9 @@ import asyncio
 from spots_data import SPOTS, SPOTS_BY_ID
 from noaa_client import (
     fetch_marine_forecast, find_working_nearest_buoy, fetch_buoy_observation,
-    fetch_tides_currents_wind,
+    fetch_tides_currents_wind, fetch_historical_observations,
 )
-from scoring import score_hour, score_hour_fetch_wind, label_for_score
+from scoring import score_hour, score_hour_fetch_wind, label_for_score, build_historical_fetch_profile
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("surf-api")
@@ -38,6 +42,13 @@ app.add_middleware(
 # every time someone loads the page. Keyed by spot id, refreshed on TTL.
 _CACHE: dict[int, dict] = {}
 _CACHE_TTL_S = 20 * 60  # 20 minutes
+
+# Historical wind/wave profiles (used only by fetch_wind spots) change much
+# more slowly than the forecast itself - the buoy's last 45 days of data
+# is a stable calibration reference, not something worth re-pulling every
+# 20 minutes. Cache per upwind buoy id for much longer.
+_HIST_CACHE: dict[str, dict] = {}
+_HIST_CACHE_TTL_S = 6 * 60 * 60  # 6 hours
 
 # Open-Meteo free tier rate-limits concurrent requests (429s if we fire
 # ~20 at once, as happens on first map load with an empty cache). Cap
@@ -77,6 +88,33 @@ async def _fetch_upwind_with_retry(spot, days: int, attempts: int = 4):
         await asyncio.sleep(wait)
 
 
+async def _get_historical_profile(spot) -> dict | None:
+    """Build (or return cached) an empirical wind/wave profile from the
+    upwind reference buoy's own realtime2 history, used to calibrate the
+    fetch_wind score against what similar aligned wind speeds have
+    actually produced there in the recent past - not just a hand-tuned
+    curve. Keyed by nearest_buoy_id since that's the buoy whose own
+    history is relevant (Neah Bay/46087 for Elwha & Freshwater Bay, New
+    Dungeness/46088 for Point Wilson)."""
+    buoy_id = spot.nearest_buoy_id
+    if not buoy_id:
+        return None
+    cached = _HIST_CACHE.get(buoy_id)
+    now = time.time()
+    if cached and (now - cached["fetched_at"]) < _HIST_CACHE_TTL_S:
+        return cached["data"]
+    try:
+        rows = await fetch_historical_observations(buoy_id)
+        profile = build_historical_fetch_profile(
+            rows, spot.facing_direction, spot.swell_window_deg, spot.fetch_min_wind_mph,
+        )
+    except Exception:
+        log.exception("historical profile fetch failed for buoy %s", buoy_id)
+        return None
+    _HIST_CACHE[buoy_id] = {"fetched_at": now, "data": profile}
+    return profile
+
+
 async def _get_scored_forecast(spot, days: int = 7) -> dict:
     cached = _CACHE.get(spot.id)
     now = time.time()
@@ -88,7 +126,8 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
     if getattr(spot, "scoring_model", "swell") == "fetch_wind":
         # Strait/fetch-limited spot: score local wind, using the upwind
         # reference point's wind over the preceding few hours as a
-        # leading indicator of fetch building down-strait.
+        # leading indicator of fetch building down-strait, plus real
+        # buoy history as a calibration check on the forecast wind speed.
         upwind_forecast = None
         if spot.upwind_lat is not None and spot.upwind_lon is not None:
             try:
@@ -96,12 +135,16 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
             except Exception:
                 log.exception("upwind forecast fetch failed for spot %s", spot.id)
 
+        historical_profile = await _get_historical_profile(spot)
+
         upwind_hours = upwind_forecast["hours"] if upwind_forecast else []
         scored_hours = []
         for i, h in enumerate(forecast["hours"]):
             # Look back a few hours at the upwind point for sustained fetch.
             window = upwind_hours[max(0, i - 6):i + 1] if upwind_hours else []
-            scored_hours.append(score_hour_fetch_wind(spot, h, upwind_hours=window))
+            scored_hours.append(score_hour_fetch_wind(
+                spot, h, upwind_hours=window, historical_profile=historical_profile,
+            ))
     else:
         scored_hours = [score_hour(spot, h) for h in forecast["hours"]]
 
@@ -205,6 +248,23 @@ async def spot_detail(spot_id: int):
                 result["secondary_observation"] = sec_obs
         except Exception:
             log.exception("secondary buoy fetch failed for spot %s", spot_id)
+
+    # For fetch_wind spots, surface the historical calibration summary
+    # (max period actually seen at the reference buoy, and how many
+    # analog wind/wave data points back the current forecast) so the
+    # detail view can show it's grounded in real buoy history, not just
+    # a static wind-speed curve.
+    if getattr(spot, "scoring_model", "swell") == "fetch_wind":
+        try:
+            profile = await _get_historical_profile(spot)
+            if profile:
+                result["historical_profile_summary"] = {
+                    "reference_buoy_id": spot.nearest_buoy_id,
+                    "max_period_s_observed": profile.get("max_period_s"),
+                    "analog_buckets": len(profile.get("buckets", {})),
+                }
+        except Exception:
+            log.exception("historical profile summary failed for spot %s", spot_id)
 
     return result
 

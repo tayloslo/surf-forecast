@@ -15,7 +15,10 @@ Two scoring models are used:
   - "fetch_wind": spots deep in the Strait/Sound where groundswell cannot
     physically arrive: the wave instead comes from sustained wind blowing
     down a narrow channel and building local fetch. See scoring.py for
-    the physical reasoning.
+    the physical reasoning, including buoy-history evidence for why swell
+    cannot reach these spots.
+
+All height/speed preference fields are US units (feet, mph).
 """
 import json
 
@@ -47,13 +50,19 @@ SPOTS = [
     # (the actual point of this app - not on Surfline)
     #
     # Elwha, WA - river-mouth wind wave ~50mi inside the Strait. Groundswell
-    # cannot survive that distance up a narrow strait (confirmed: the marine
-    # wave model returns near-zero swell here year-round). What builds the
-    # wave is sustained west wind blowing the length of the strait (fetch).
-    # facing_direction=270 (West) = the direction wind needs to blow FROM
-    # to travel down-strait toward Elwha and build a wave.
+    # cannot survive that distance up a narrow strait. Confirmed two ways:
+    # (1) the Open-Meteo marine wave model returns near-zero swell here
+    # year-round, and (2) real buoy history backs it up - NDBC 46087 at the
+    # strait mouth logs dominant periods up to 19s over its 45-day rolling
+    # archive, but NDBC 46088 just ~30mi further in tops out at 11s with a
+    # much lower average, and 1.5m max wave height. What builds the wave at
+    # Elwha instead is sustained west wind blowing the length of the strait
+    # (fetch). facing_direction=270 (West) = the direction wind needs to
+    # blow FROM to travel down-strait toward Elwha and build a wave.
     # Upwind reference = NDBC buoy 46087, Neah Bay, at the strait mouth -
-    # sustained west wind there precedes fetch arriving at Elwha by hours.
+    # sustained west wind there precedes fetch arriving at Elwha by hours,
+    # and its 45-day wind/wave history is used to calibrate the model
+    # against real analog conditions (see build_historical_fetch_profile).
     # Local ground truth = NOAA tide station 9444090, Port Angeles, about
     # 9km from the spot (no NDBC wave buoy sits right at Elwha itself).
     {
@@ -63,7 +72,7 @@ SPOTS = [
         "upwind_lat": 48.493, "upwind_lon": -124.727,
         "nearest_buoy_id": "46087",
         "secondary_buoy_id": "9444090",
-        "fetch_min_wind_kmh": 20.0, "fetch_ideal_wind_kmh": 35.0, "fetch_max_wind_kmh": 55.0,
+        "fetch_min_wind_mph": 12.4, "fetch_ideal_wind_mph": 21.7, "fetch_max_wind_mph": 34.2,
     },
     # Freshwater Bay, WA - similar mechanism to Elwha, a west-facing
     # cove a bit further up-strait (closer to Port Angeles/Neah Bay).
@@ -75,7 +84,7 @@ SPOTS = [
         "upwind_lat": 48.493, "upwind_lon": -124.727,
         "nearest_buoy_id": "46087",
         "secondary_buoy_id": "9444090",
-        "fetch_min_wind_kmh": 18.0, "fetch_ideal_wind_kmh": 32.0, "fetch_max_wind_kmh": 50.0,
+        "fetch_min_wind_mph": 11.2, "fetch_ideal_wind_mph": 19.9, "fetch_max_wind_mph": 31.1,
     },
     # Point Wilson, Port Townsend - sits at the mouth of Admiralty Inlet,
     # where wind funneling up/down the Strait meets the entrance to Puget
@@ -89,7 +98,7 @@ SPOTS = [
         "upwind_lat": 48.493, "upwind_lon": -124.727,
         "nearest_buoy_id": "46088",
         "secondary_buoy_id": "9444090",
-        "fetch_min_wind_kmh": 22.0, "fetch_ideal_wind_kmh": 38.0, "fetch_max_wind_kmh": 55.0,
+        "fetch_min_wind_mph": 13.7, "fetch_ideal_wind_mph": 23.6, "fetch_max_wind_mph": 34.2,
     },
 ]
 

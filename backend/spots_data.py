@@ -1,11 +1,12 @@
 """
 Permanent surf spot catalog. No user CRUD - spots are a fixed, curated
-dataset (California prototype) loaded from seed_spots.json at startup.
-See seed_spots.py for provenance of each entry.
+dataset loaded from seed_spots.json at startup. See seed_spots.py for
+provenance of each entry.
 
 Each spot gets sane default scoring preferences (period/height/wind
 tolerances) since the seed data itself only carries geometry
-(lat/lon/facing_direction/swell_window_deg).
+(lat/lon/facing_direction/swell_window_deg). All height/speed
+preferences are US units (feet, mph).
 """
 import json
 import os
@@ -15,17 +16,17 @@ SEED_PATH = os.path.join(os.path.dirname(__file__), "seed_spots.json")
 DEFAULT_PREFS = dict(
     min_good_period_s=8.0,
     ideal_period_s=12.0,
-    min_good_height_m=0.4,
-    ideal_height_m=1.4,
-    max_good_height_m=3.5,
-    max_good_wind_kmh=15.0,
+    min_good_height_ft=1.5,
+    ideal_height_ft=4.5,
+    max_good_height_ft=11.5,
+    max_good_wind_mph=9.0,
     onshore_window_deg=90.0,
-    # Fetch-limited wind-wave thresholds (km/h) - only used by spots with
+    # Fetch-limited wind-wave thresholds (mph) - only used by spots with
     # scoring_model="fetch_wind" (e.g. Elwha). Harmless defaults for every
     # other spot since the normal swell scoring path never reads them.
-    fetch_min_wind_kmh=20.0,
-    fetch_ideal_wind_kmh=35.0,
-    fetch_max_wind_kmh=55.0,
+    fetch_min_wind_mph=12.0,
+    fetch_ideal_wind_mph=22.0,
+    fetch_max_wind_mph=34.0,
     # "swell" scoring (default) uses the Open-Meteo marine wave model;
     # "fetch_wind" uses local + upwind wind forecasts instead, for straits
     # where groundswell cannot physically arrive.

@@ -46,9 +46,9 @@
     "upwind_lon": -124.727,
     "nearest_buoy_id": "46087",
     "secondary_buoy_id": "9444090",
-    "fetch_min_wind_kmh": 20.0,
-    "fetch_ideal_wind_kmh": 35.0,
-    "fetch_max_wind_kmh": 55.0,
+    "fetch_min_wind_mph": 12.4,
+    "fetch_ideal_wind_mph": 21.7,
+    "fetch_max_wind_mph": 34.2,
     "source": "curated"
   },
   {
@@ -62,9 +62,9 @@
     "upwind_lon": -124.727,
     "nearest_buoy_id": "46087",
     "secondary_buoy_id": "9444090",
-    "fetch_min_wind_kmh": 18.0,
-    "fetch_ideal_wind_kmh": 32.0,
-    "fetch_max_wind_kmh": 50.0,
+    "fetch_min_wind_mph": 11.2,
+    "fetch_ideal_wind_mph": 19.9,
+    "fetch_max_wind_mph": 31.1,
     "source": "curated"
   },
   {
@@ -78,9 +78,9 @@
     "upwind_lon": -124.727,
     "nearest_buoy_id": "46088",
     "secondary_buoy_id": "9444090",
-    "fetch_min_wind_kmh": 22.0,
-    "fetch_ideal_wind_kmh": 38.0,
-    "fetch_max_wind_kmh": 55.0,
+    "fetch_min_wind_mph": 13.7,
+    "fetch_ideal_wind_mph": 23.6,
+    "fetch_max_wind_mph": 34.2,
     "source": "curated"
   }
 ]
