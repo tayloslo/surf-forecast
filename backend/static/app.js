@@ -177,17 +177,13 @@ async function openDetail(spotId) {
           line up on top of size.
         </div>`;
       })() : ""}
-      ${spot.storm_signature ? (() => {
-        const ss = spot.storm_signature;
+      ${spot.transmission_model_summary ? (() => {
+        const tm = spot.transmission_model_summary;
         return `<div class="factor-benchmark">
-          <strong>Storm signature (${ss.event_count} distinct ${ss.big_wave_height_ft}ft+ events):</strong> ${ss.summary}
-          <div style="opacity:0.7;font-size:0.85em;margin-top:4px;">
-            Upwind wind ${ss.lookback_hours}h before peak &mdash; median ${ss.upwind_wind_dir_deg.median}&deg;
-            @ ${ss.upwind_wind_speed_mph.median}mph, most common ${ss.upwind_wind_dir_deg.dominant_bucket_low_deg}-${ss.upwind_wind_dir_deg.dominant_bucket_low_deg + 10}&deg;
-            (${ss.upwind_wind_dir_deg.dominant_bucket_pct}% of events) &middot;
-            local wave arrives from ${ss.local_peak_wave_dir_deg_median}&deg; @ ${ss.local_peak_period_s_median}s,
-            max seen ${ss.local_peak_height_ft_max}ft.
-          </div>
+          <strong>Swell transmission model (${tm.paired_hours_used} paired buoy-hours, ${tm.upwind_buoy_id} &rarr; ${tm.local_buoy_id}):</strong>
+          on average <strong>${Math.round(tm.global_height_transmission_ratio * 100)}%</strong> of upwind swell height survives the trip down-strait
+          (learned across ${tm.height_ratio_buckets} period/angle buckets, not a flat number), arriving here roughly
+          <strong>${tm.lag_hours}h</strong> after leaving the strait's mouth.
         </div>`;
       })() : ""}
     </details>`;
@@ -212,18 +208,6 @@ async function openDetail(spotId) {
       <div>Neah Bay swell right now: ${s.neah_bay_swell_height_ft} ft @ ${s.neah_bay_swell_period_s ?? "?"}s,
         from ${s.neah_bay_swell_dir_deg}&deg; (${s.angle_offset_from_axis_deg}&deg; off the ${s.strait_axis_bearing_deg}&deg; strait axis)</div>
       <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Swell-only, separated from local wind-chop &middot; observed ${s.observed_at}</div>
-    </div>`;
-  }
-
-  if (cc && cc.storm_signature_match) {
-    const sm = cc.storm_signature_match;
-    const smCls = sm.matches_storm_pattern ? "good" : "poor";
-    html += `<div class="buoy-box">
-      <h4>Wind direction vs. storm pattern</h4>
-      <div class="strike-verdict badge-${smCls}" style="font-size:0.78rem;">${sm.matches_storm_pattern ? "Matches historical 6ft+ pattern" : "Off the historical pattern"}</div>
-      <div>Live upwind wind: ${sm.wind_dir_deg}&deg; vs. historical median ${sm.storm_signature_dir_deg}&deg;
-        (${sm.off_angle_deg}&deg; off, fitness ${sm.fitness})</div>
-      <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Based on wind direction 6h before local buoy's peak, across all past 6ft+ events</div>
     </div>`;
   }
 
@@ -283,24 +267,15 @@ async function openDetail(spotId) {
   // buoy-relationship analysis, projecting the next several days.
   // ---------------------------------------------------------------
   html += `<div class="section-heading">Forecast</div>
-    <div class="section-sub">Local wind-fetch + upwind swell strike-signal (lagged ~3h) + historical buoy analogs</div>`;
+    <div class="section-sub">Projected local swell, transmitted down-strait from the upwind Neah Bay forecast, groomed/blown out by local wind</div>`;
 
-  if (spot.historical_profile_summary) {
-    const hp = spot.historical_profile_summary;
-    const gd = hp.good_day_analysis;
+  if (spot.transmission_model_summary) {
+    const tm = spot.transmission_model_summary;
     html += `<div class="buoy-box" style="opacity:0.85;">
-      <h4>Historical calibration (buoy ${hp.reference_buoy_id})</h4>
-      <div>Max swell period seen in ${gd ? fmtDuration(gd.total_days) : "this record"}: ${hp.max_period_s_observed ?? "?"} s
-        (confirms groundswell doesn't reach this far into the strait)</div>
-      <div>Forecast wind speeds are compared against ${hp.analog_buckets} real historical
-        wind-speed buckets from this buoy's own wind/wave record.</div>
-      ${gd && gd.wave_days ? `<div style="margin-top:6px;">Of the last ${fmtDuration(gd.total_days)},
-        <strong>${gd.wave_days}</strong> days had a wave &ge; ${gd.good_wave_height_ft}ft at some point &mdash;
-        but wind was only actually aligned+strong enough to have produced it on
-        <strong>${gd.good_wind_days} of those (${gd.good_wind_pct}%)</strong>. The rest likely came from a
-        misaligned or short-lived gust, not a clean fetch-driven wave.</div>` : ""}
-      ${gd && !gd.wave_days ? `<div style="margin-top:6px;">No day in the last ${fmtDuration(gd.total_days)} had a wave
-        &ge; ${gd.good_wave_height_ft}ft at this buoy.</div>` : ""}
+      <h4>Transmission model calibration (buoy ${tm.upwind_buoy_id} &rarr; ${tm.local_buoy_id})</h4>
+      <div>Built from <strong>${tm.paired_hours_used}</strong> paired historical buoy-hours &middot;
+        average height transmission <strong>${Math.round(tm.global_height_transmission_ratio * 100)}%</strong>
+        (${tm.height_ratio_buckets} period/angle buckets) &middot; lag <strong>${tm.lag_hours}h</strong></div>
     </div>`;
   }
 
@@ -314,20 +289,11 @@ async function openDetail(spotId) {
       hours.filter((_, i) => i % 3 === 0).forEach((h) => {
         let detail;
         if (h.model === "fetch_wind") {
-          detail = `wind ${h.wind_speed_mph?.toFixed(0) ?? "?"}mph @ ${h.wind_dir_deg?.toFixed(0) ?? "?"}\u00b0 (fetch-driven wave)`;
-          if (h.historical_wave_height_ft != null) {
-            detail += ` &middot; similar past wind produced ~${h.historical_wave_height_ft.toFixed(1)}ft (${h.historical_analog_count} analogs)`;
+          detail = `${h.swell_height_ft?.toFixed(1) ?? "?"}ft @ ${h.swell_period_s?.toFixed(0) ?? "?"}s from ${h.swell_dir_deg?.toFixed(0) ?? "?"}\u00b0 (transmitted)`;
+          if (h.upwind_height_ft != null) {
+            detail += ` &middot; projected from ${h.upwind_height_ft.toFixed(1)}ft upwind @ Neah Bay (${Math.round((h.transmission_ratio ?? 0) * 100)}% transmission, ${h.lag_hours}h lag)`;
           }
-          if (h.predicted_strike_signal != null) {
-            detail += h.predicted_strike ?
-              ` &middot; <strong>swell strike signal ${h.predicted_strike_signal}</strong> (upwind swell projected to arrive)` :
-              ` &middot; swell signal ${h.predicted_strike_signal} (below strike threshold)`;
-          }
-          if (h.storm_signature_match != null) {
-            detail += h.storm_signature_match.matches_storm_pattern ?
-              ` &middot; wind dir matches storm pattern` :
-              ` &middot; wind dir ${h.storm_signature_match.off_angle_deg}\u00b0 off storm pattern`;
-          }
+          detail += ` &middot; local wind ${h.wind_speed_mph?.toFixed(0) ?? "?"}mph @ ${h.wind_dir_deg?.toFixed(0) ?? "?"}\u00b0 (${h.components?.wind_fitness >= 0.6 ? "grooming" : "chopping it up"})`;
         } else {
           detail = `${h.swell_height_ft?.toFixed(1) ?? "?"}ft @ ${h.swell_period_s?.toFixed(0) ?? "?"}s, wind ${h.wind_speed_mph?.toFixed(0) ?? "?"}mph`;
         }

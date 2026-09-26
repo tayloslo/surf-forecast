@@ -36,6 +36,11 @@ SPOTS = [
         # the closest real wave observation to Elwha available.
         "local_wave_buoy_id": "46267",
         "fetch_min_wind_mph": 12.4, "fetch_ideal_wind_mph": 21.7, "fetch_max_wind_mph": 34.2,
+        # Elwha's projected LOCAL swell period (from the transmission model,
+        # see scoring.py) runs ~7.5-10s, not the 8-12s default tuned for
+        # open-coast groundswell - transmitted energy here is shorter-period
+        # by nature of what survives the trip down-strait.
+        "min_good_period_s": 6.0, "ideal_period_s": 9.5,
     },
 ]
 

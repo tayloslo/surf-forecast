@@ -14,6 +14,8 @@
     "fetch_min_wind_mph": 12.4,
     "fetch_ideal_wind_mph": 21.7,
     "fetch_max_wind_mph": 34.2,
-    "source": "curated"
+    "source": "curated",
+    "min_good_period_s": 6.0,
+    "ideal_period_s": 9.5
   }
 ]

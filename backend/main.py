@@ -29,10 +29,10 @@ from noaa_client import (
     fetch_historical_wave_observations,
 )
 from scoring import (
-    score_hour, score_hour_fetch_wind, label_for_score, build_historical_fetch_profile,
-    score_live_wave_observation, build_current_conditions, SWELL_PROPAGATION_LAG_HOURS,
+    score_hour, score_hour_swell_transmission, label_for_score,
+    score_live_wave_observation, build_current_conditions,
     scale_description_for_spot, quality_factors_for_spot, build_local_swell_benchmark,
-    build_storm_signature, score_wind_direction_vs_storm_signature,
+    build_swell_transmission_model, TRANSMISSION_LAG_HOURS, STRAIT_AXIS_BEARING_DEG,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -50,28 +50,23 @@ app.add_middleware(
 _CACHE: dict[int, dict] = {}
 _CACHE_TTL_S = 20 * 60  # 20 minutes
 
-# Historical wind/wave profiles (used only by fetch_wind spots) change much
-# more slowly than the forecast itself - the buoy's 2020-present archive
-# is a stable calibration reference, not something worth re-pulling every
-# 20 minutes (and now heavy enough - years of data, not 45 days - that we
-# really don't want to). Cache per upwind buoy id for much longer.
-_HIST_CACHE: dict[str, dict] = {}
-_HIST_CACHE_TTL_S = 24 * 60 * 60  # 24 hours (fetch now spans 2020-present multi-year archive, much heavier than the old 45-day pull)
+# Same idea as _LOCAL_BENCHMARK_CACHE, but for the empirical swell-
+# transmission model (see build_swell_transmission_model) - the
+# upwind(Neah Bay)->local(Angeles Point) height ratio / direction /
+# period lookups learned from years of paired buoy history. This is the
+# core calibration the new forecast model runs on, so it's worth caching
+# for a long time (24h) rather than rebuilding on every request - it's a
+# multi-year archive pull on a cache miss.
+_TRANSMISSION_CACHE: dict[tuple, dict] = {}
+_TRANSMISSION_CACHE_TTL_S = 24 * 60 * 60  # 24 hours
 
-# Same idea as _HIST_CACHE, but keyed on the LOCAL wave buoy (e.g. Angeles
-# Point/46267 for Elwha) rather than the upwind reference buoy - this is
-# the "how big has it actually gotten right at this spot, historically"
-# benchmark, which is a different buoy/question than the upwind fetch
-# calibration above.
+# Same idea as _TRANSMISSION_CACHE, but keyed on the LOCAL wave buoy (e.g.
+# Angeles Point/46267 for Elwha) alone - this is the "how big has it
+# actually gotten right at this spot, historically" benchmark, a
+# different, simpler question than the upwind transmission calibration
+# above.
 _LOCAL_BENCHMARK_CACHE: dict[str, dict] = {}
-_LOCAL_BENCHMARK_CACHE_TTL_S = 24 * 60 * 60  # 24 hours (same multi-year archive cost as _HIST_CACHE)
-
-# Same idea again, but for the empirical storm signature (see
-# build_storm_signature) - what upwind wind direction/speed has
-# actually preceded a 6ft+ local swell event, historically. Keyed by
-# the (upwind, local) buoy pair since it needs both.
-_STORM_SIG_CACHE: dict[tuple, dict] = {}
-_STORM_SIG_CACHE_TTL_S = 24 * 60 * 60  # 24 hours, same reasoning as the other historical caches
+_LOCAL_BENCHMARK_CACHE_TTL_S = 24 * 60 * 60  # 24 hours (same multi-year archive cost as _TRANSMISSION_CACHE)
 
 # Open-Meteo free tier rate-limits concurrent requests (429s if we fire
 # ~20 at once, as happens on first map load with an empty cache). Cap
@@ -111,31 +106,34 @@ async def _fetch_upwind_with_retry(spot, days: int, attempts: int = 4):
         await asyncio.sleep(wait)
 
 
-async def _get_historical_profile(spot) -> dict | None:
-    """Build (or return cached) an empirical wind/wave profile from the
-    upwind reference buoy's own realtime2 history, used to calibrate the
-    fetch_wind score against what similar aligned wind speeds have
-    actually produced there in the recent past - not just a hand-tuned
-    curve. Keyed by nearest_buoy_id since that's the buoy whose own
-    history is relevant (Neah Bay/46087 for Elwha & Freshwater Bay, New
-    Dungeness/46088 for Point Wilson)."""
-    buoy_id = spot.nearest_buoy_id
-    if not buoy_id:
+async def _get_transmission_model(spot) -> dict | None:
+    """Build (or return cached) the empirical swell-transmission model
+    (see build_swell_transmission_model) for a fetch_wind spot that has
+    both an upwind reference buoy and a local wave buoy configured - the
+    learned upwind(Neah Bay)->local(Angeles Point) height-ratio/
+    direction/period relationship the new forecast score is built on,
+    used both to project local swell per forecast hour and to explain
+    the mechanism in the UI."""
+    upwind_id = spot.nearest_buoy_id
+    local_id = getattr(spot, "local_wave_buoy_id", None)
+    if not upwind_id or not local_id:
         return None
-    cached = _HIST_CACHE.get(buoy_id)
+    key = (upwind_id, local_id)
+    cached = _TRANSMISSION_CACHE.get(key)
     now = time.time()
-    if cached and (now - cached["fetched_at"]) < _HIST_CACHE_TTL_S:
+    if cached and (now - cached["fetched_at"]) < _TRANSMISSION_CACHE_TTL_S:
         return cached["data"]
     try:
-        rows = await fetch_historical_observations(buoy_id)
-        profile = build_historical_fetch_profile(
-            rows, spot.facing_direction, spot.swell_window_deg, spot.fetch_min_wind_mph,
+        local_rows = await fetch_historical_wave_observations(local_id)
+        upwind_rows = await fetch_historical_observations(upwind_id)
+        model = build_swell_transmission_model(
+            local_rows, upwind_rows, STRAIT_AXIS_BEARING_DEG,
         )
     except Exception:
-        log.exception("historical profile fetch failed for buoy %s", buoy_id)
+        log.exception("transmission model build failed for buoys %s/%s", upwind_id, local_id)
         return None
-    _HIST_CACHE[buoy_id] = {"fetched_at": now, "data": profile}
-    return profile
+    _TRANSMISSION_CACHE[key] = {"fetched_at": now, "data": model}
+    return model
 
 
 async def _get_local_swell_benchmark(spot) -> dict | None:
@@ -162,33 +160,6 @@ async def _get_local_swell_benchmark(spot) -> dict | None:
     _LOCAL_BENCHMARK_CACHE[buoy_id] = {"fetched_at": now, "data": benchmark}
     return benchmark
 
-async def _get_storm_signature(spot) -> dict | None:
-    """Build (or return cached) the empirical storm signature (see
-    build_storm_signature) for a fetch_wind spot that has both an
-    upwind reference buoy and a local wave buoy configured - the
-    concrete "what has a 6ft+ day here actually looked like" answer,
-    used both to explain the pattern in the UI and to score live wind
-    direction against a real historical target rather than a
-    hand-tuned angle."""
-    upwind_id = spot.nearest_buoy_id
-    local_id = getattr(spot, "local_wave_buoy_id", None)
-    if not upwind_id or not local_id:
-        return None
-    key = (upwind_id, local_id)
-    cached = _STORM_SIG_CACHE.get(key)
-    now = time.time()
-    if cached and (now - cached["fetched_at"]) < _STORM_SIG_CACHE_TTL_S:
-        return cached["data"]
-    try:
-        local_rows = await fetch_historical_wave_observations(local_id)
-        upwind_rows = await fetch_historical_observations(upwind_id)
-        signature = build_storm_signature(local_rows, upwind_rows)
-    except Exception:
-        log.exception("storm signature build failed for buoys %s/%s", upwind_id, local_id)
-        return None
-    _STORM_SIG_CACHE[key] = {"fetched_at": now, "data": signature}
-    return signature
-
 
 
 async def _get_scored_forecast(spot, days: int = 7) -> dict:
@@ -200,15 +171,12 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
     forecast = await _fetch_with_retry(spot, days)
 
     if getattr(spot, "scoring_model", "swell") == "fetch_wind":
-        # Strait/fetch-limited spot: score local wind, using the upwind
-        # reference point's wind over the preceding few hours as a
-        # leading indicator of fetch building down-strait, plus real
-        # buoy history as a calibration check on the forecast wind speed,
-        # plus the upwind SWELL forecast (run through the same
-        # strike-signal formula validated in Current Conditions) lagged
-        # by the empirically-measured propagation delay - this is what
-        # aligns the Forecast section with today's live-buoy work instead
-        # of scoring local wind-fetch alone.
+        # Strait spot: project local swell from the upwind (Neah Bay)
+        # forecast via the validated swell-transmission model, lagged by
+        # TRANSMISSION_LAG_HOURS (the measured propagation delay), then
+        # score that projected swell the normal way - local wind at the
+        # spot itself is only a grooming/onshore-blowout modifier, not a
+        # wave-generation input (see scoring.py module header for why).
         upwind_forecast = None
         if spot.upwind_lat is not None and spot.upwind_lon is not None:
             try:
@@ -216,27 +184,18 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
             except Exception:
                 log.exception("upwind forecast fetch failed for spot %s", spot.id)
 
-        historical_profile = await _get_historical_profile(spot)
-        storm_signature = await _get_storm_signature(spot)
+        transmission_model = await _get_transmission_model(spot)
 
         upwind_hours = upwind_forecast["hours"] if upwind_forecast else []
         scored_hours = []
         for i, h in enumerate(forecast["hours"]):
-            # Look back a few hours at the upwind point for sustained fetch.
-            window = upwind_hours[max(0, i - 6):i + 1] if upwind_hours else []
-            # The swell that left Neah Bay SWELL_PROPAGATION_LAG_HOURS ago
-            # is what's arriving here now (both forecasts are hourly and
+            # The swell that left Neah Bay TRANSMISSION_LAG_HOURS ago is
+            # what's arriving here now (both forecasts are hourly and
             # share the same start time, so this is a simple index offset).
-            lag_idx = i - SWELL_PROPAGATION_LAG_HOURS
-            upwind_swell_hour = upwind_hours[lag_idx] if upwind_hours and lag_idx >= 0 else None
-            # Upwind wind direction ~6h ahead of this hour's local arrival
-            # (same lag the storm signature was built on) - used to grade
-            # against the empirical storm-direction signature.
-            storm_upwind_hour = upwind_hours[i] if upwind_hours and i < len(upwind_hours) else None
-            scored_hours.append(score_hour_fetch_wind(
-                spot, h, upwind_hours=window, historical_profile=historical_profile,
-                upwind_swell_hour=upwind_swell_hour, storm_signature=storm_signature,
-                storm_upwind_hour=storm_upwind_hour,
+            lag_idx = i - TRANSMISSION_LAG_HOURS
+            upwind_hour = upwind_hours[lag_idx] if upwind_hours and lag_idx >= 0 else None
+            scored_hours.append(score_hour_swell_transmission(
+                spot, h, upwind_hour=upwind_hour, transmission_model=transmission_model,
             ))
     else:
         scored_hours = [score_hour(spot, h) for h in forecast["hours"]]
@@ -444,48 +403,35 @@ async def spot_detail(spot_id: int):
     # independent local wind-chop) - this is the "what in the live
     # readings will actually make a good wave at Elwha right now" answer,
     # distinct from the hourly forecast model below.
-    storm_signature = None
-    if getattr(spot, "scoring_model", "swell") == "fetch_wind":
-        try:
-            storm_signature = await _get_storm_signature(spot)
-            if storm_signature:
-                result["storm_signature"] = storm_signature
-        except Exception:
-            log.exception("storm signature fetch failed for spot %s", spot_id)
-
     if neah_bay_obs or local_wave_obs:
         try:
             current_conditions = build_current_conditions(
                 spot, neah_bay_obs, local_wave_obs, neah_bay_spec, local_wave_spec,
-                storm_signature=storm_signature,
             )
             if current_conditions:
                 result["current_conditions"] = current_conditions
         except Exception:
             log.exception("current conditions build failed for spot %s", spot_id)
 
-    # For fetch_wind spots, surface the historical calibration summary
-    # (max period actually seen at the reference buoy, and how many
-    # analog wind/wave data points back the current forecast) so the
-    # detail view can show it's grounded in real buoy history, not just
-    # a static wind-speed curve.
+    # For fetch_wind spots, surface a summary of the swell-transmission
+    # model (see build_swell_transmission_model) so the detail view can
+    # show the forecast is grounded in a real, validated upwind->local
+    # relationship learned from years of paired buoy data, not a static
+    # wind-speed curve.
     if getattr(spot, "scoring_model", "swell") == "fetch_wind":
         try:
-            profile = await _get_historical_profile(spot)
-            if profile:
-                result["historical_profile_summary"] = {
-                    "reference_buoy_id": spot.nearest_buoy_id,
-                    "max_period_s_observed": profile.get("max_period_s"),
-                    "analog_buckets": len(profile.get("buckets", {})),
-                    # How many of the historically "there's a wave" days
-                    # also had wind actually aligned+strong enough to have
-                    # produced it, vs. a stray misaligned gust - answers
-                    # "of the days with waves, how many were actually
-                    # good?" using this buoy's own realtime2 history.
-                    "good_day_analysis": profile.get("good_day_analysis"),
+            model = await _get_transmission_model(spot)
+            if model:
+                result["transmission_model_summary"] = {
+                    "upwind_buoy_id": spot.nearest_buoy_id,
+                    "local_buoy_id": getattr(spot, "local_wave_buoy_id", None),
+                    "lag_hours": model.get("lag_hours"),
+                    "paired_hours_used": model.get("n_pairs"),
+                    "global_height_transmission_ratio": model.get("global_height_ratio"),
+                    "height_ratio_buckets": len(model.get("height_ratio_lookup", {})),
                 }
         except Exception:
-            log.exception("historical profile summary failed for spot %s", spot_id)
+            log.exception("transmission model summary failed for spot %s", spot_id)
 
     # Spot-specific explanation of what the 0-10 scale actually means here
     # (e.g. Elwha's fetch-limited wind-wave scale is NOT a groundswell
