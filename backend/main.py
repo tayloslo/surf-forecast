@@ -25,7 +25,7 @@ from datetime import datetime
 from spots_data import SPOTS, SPOTS_BY_ID
 from noaa_client import (
     fetch_marine_forecast, find_working_nearest_buoy, fetch_buoy_observation,
-    fetch_tides_currents_wind, fetch_historical_observations,
+    fetch_tides_currents_wind, fetch_historical_observations, fetch_buoy_spectral,
 )
 from scoring import (
     score_hour, score_hour_fetch_wind, label_for_score, build_historical_fetch_profile,
@@ -267,6 +267,7 @@ async def spot_detail(spot_id: int):
         result["forecast_error"] = f"Could not load forecast right now: {e}"
 
     neah_bay_obs = None
+    neah_bay_spec = None
     try:
         if spot.nearest_buoy_id:
             obs = await fetch_buoy_observation(spot.nearest_buoy_id)
@@ -279,9 +280,19 @@ async def spot_detail(spot_id: int):
             # For fetch_wind strait spots this reference buoy IS Neah Bay
             # (46087), the upwind leading-indicator buoy the strike-signal
             # formula is built on - keep the raw reading so we can reuse
-            # it below without a second network call.
+            # it below without a second network call, and also pull its
+            # SPECTRAL partition (swell vs local wind-chop, see
+            # noaa_client.fetch_buoy_spectral) since correlating the two
+            # buoys' true swell components is a cleaner signal than
+            # correlating the blended wave height.
             if spot.nearest_buoy_id == "46087":
                 neah_bay_obs = obs
+                try:
+                    neah_bay_spec = await fetch_buoy_spectral(spot.nearest_buoy_id)
+                    if neah_bay_spec:
+                        result["buoy_swell_partition"] = neah_bay_spec
+                except Exception:
+                    log.exception("Neah Bay spectral fetch failed for spot %s", spot_id)
         else:
             result["buoy_error"] = "No nearby NOAA buoy currently has live data."
     except Exception:
@@ -306,6 +317,7 @@ async def spot_detail(spot_id: int):
     # but its wave reading is still the closest real observation available.
     local_wave_id = getattr(spot, "local_wave_buoy_id", None)
     local_wave_obs = None
+    local_wave_spec = None
     if local_wave_id:
         try:
             local_wave_obs = await fetch_buoy_observation(local_wave_id)
@@ -319,18 +331,28 @@ async def spot_detail(spot_id: int):
                 if live:
                     live["label"] = label_for_score(live["score"])
                     result["current_live_observation"] = live
+            try:
+                local_wave_spec = await fetch_buoy_spectral(local_wave_id)
+                if local_wave_spec:
+                    result["local_swell_partition"] = local_wave_spec
+            except Exception:
+                log.exception("local wave spectral fetch failed for spot %s", spot_id)
         except Exception:
             log.exception("local wave buoy fetch failed for spot %s", spot_id)
 
     # "Current Conditions": the validated strike-signal formula, computed
-    # live from the upwind Neah Bay reading (leading indicator down the
-    # strait axis) plus the local Angeles Point reading as direct
-    # corroboration - this is the "what in the live readings will
-    # actually make a good wave at Elwha right now" answer, distinct from
-    # the hourly forecast model below.
+    # live from the upwind Neah Bay SWELL partition (leading indicator
+    # down the strait axis), plus a direct swell-to-swell correlation
+    # against the local Angeles Point swell partition to check whether
+    # what's showing up locally is actually the same wave train (vs
+    # independent local wind-chop) - this is the "what in the live
+    # readings will actually make a good wave at Elwha right now" answer,
+    # distinct from the hourly forecast model below.
     if neah_bay_obs or local_wave_obs:
         try:
-            current_conditions = build_current_conditions(spot, neah_bay_obs, local_wave_obs)
+            current_conditions = build_current_conditions(
+                spot, neah_bay_obs, local_wave_obs, neah_bay_spec, local_wave_spec,
+            )
             if current_conditions:
                 result["current_conditions"] = current_conditions
         except Exception:

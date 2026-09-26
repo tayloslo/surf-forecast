@@ -97,21 +97,38 @@ async function openDetail(spotId) {
     const s = cc.strike_signal;
     const strikeCls = s.is_strike ? "good" : "poor";
     html += `<div class="buoy-box strike-box">
-      <h4>Strike signal (upwind buoy ${s.source.replace("live_buoy_", "")})</h4>
+      <h4>Strike signal (upwind swell @ Neah Bay)</h4>
       <div class="strike-verdict badge-${strikeCls}">${s.verdict}</div>
       <div>Signal: <strong>${s.signal}</strong> (strike threshold: ${s.threshold})</div>
-      <div>Neah Bay right now: ${s.neah_bay_wave_height_ft} ft @ ${s.neah_bay_period_s ?? "?"}s,
-        from ${s.neah_bay_wave_dir_deg}&deg; (${s.angle_offset_from_axis_deg}&deg; off the ${s.strait_axis_bearing_deg}&deg; strait axis)</div>
-      <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Observed ${s.observed_at}</div>
+      <div>Neah Bay swell right now: ${s.neah_bay_swell_height_ft} ft @ ${s.neah_bay_swell_period_s ?? "?"}s,
+        from ${s.neah_bay_swell_dir_deg}&deg; (${s.angle_offset_from_axis_deg}&deg; off the ${s.strait_axis_bearing_deg}&deg; strait axis)</div>
+      <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Swell-only, separated from local wind-chop &middot; observed ${s.observed_at}</div>
+    </div>`;
+  }
+
+  if (cc && cc.swell_correlation) {
+    const sc = cc.swell_correlation;
+    const matchCls = sc.same_train ? "good" : "poor";
+    html += `<div class="buoy-box">
+      <h4>Swell correlation: Neah Bay &rarr; Angeles Point</h4>
+      <div class="strike-verdict badge-${matchCls}" style="font-size:0.78rem;">${sc.same_train ? "Same swell train confirmed" : "Directions don't match"}</div>
+      <div>Neah Bay swell: ${sc.neah_bay_swell_height_ft} ft @ ${sc.neah_bay_swell_period_s ?? "?"}s from ${sc.neah_bay_swell_dir_deg ?? "?"}&deg;</div>
+      <div>Angeles Pt swell: ${sc.local_swell_height_ft} ft @ ${sc.local_swell_period_s ?? "?"}s from ${sc.local_swell_dir_deg ?? "?"}&deg;
+        (${sc.direction_diff_deg ?? "?"}&deg; direction difference)</div>
+      ${sc.transmission_pct != null ? `<div>Live transmission: <strong>${sc.transmission_pct}%</strong> of Neah Bay's swell height is showing up here right now</div>` : ""}
+      <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">${sc.note}</div>
     </div>`;
   }
 
   if (liveLocal) {
     const w = liveLocal;
     const wCls = scoreClass(w.label);
+    const lp = spot.local_swell_partition;
     html += `<div class="buoy-box">
       <h4>Local wave buoy (Angeles Point) &middot; <span class="badge-${wCls}" style="padding:2px 8px;border-radius:10px;color:white;font-size:0.75em;">${w.label}</span></h4>
-      <div>Wave height: ${w.wave_height_ft ?? "?"} ft &middot; Period: ${w.dominant_period_s ?? "?"} s &middot; Dir: ${w.wave_dir_deg ?? "?"}&deg;</div>
+      <div>Blended reading: ${w.wave_height_ft ?? "?"} ft @ ${w.dominant_period_s ?? "?"} s &middot; Dir: ${w.wave_dir_deg ?? "?"}&deg;</div>
+      ${lp ? `<div style="opacity:0.8;">&rarr; split: swell ${lp.swell_height_ft ?? "?"}ft@${lp.swell_period_s ?? "?"}s from ${lp.swell_dir_deg ?? "?"}&deg;,
+        wind-wave ${lp.windwave_height_ft ?? "?"}ft@${lp.windwave_period_s ?? "?"}s from ${lp.windwave_dir_deg ?? "?"}&deg;</div>` : ""}
       <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Observed ${w.observed_at}</div>
     </div>`;
   }

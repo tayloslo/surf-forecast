@@ -369,8 +369,8 @@ def score_live_wave_observation(spot: Spot, obs: dict) -> dict | None:
 #   axis from Neah Bay to Angeles Point. Swell arriving from squarely down
 #   this axis loses the least energy to shadowing by the headlands on
 #   either side; swell arriving off-axis gets progressively shadowed out.
-# signal = neah_bay_wave_height_ft * cos(angle_offset)^2 * (1.3 if the
-#   dominant period is under 10s else 1.0). The period bonus exists
+# signal = neah_bay_SWELL_height_ft * cos(angle_offset)^2 * (1.3 if the
+#   swell period is under 10s else 1.0). The period bonus exists
 #   because in this stretch of strait, shorter-period energy measured at
 #   Neah Bay empirically transmits down-strait with LESS relative loss
 #   than long-period energy (see energy_matrix analysis: -5.5dB short
@@ -379,20 +379,36 @@ def score_live_wave_observation(spot: Spot, obs: dict) -> dict | None:
 # STRIKE_THRESHOLD = 10: at/above this signal value, roughly 44% of
 #   historical hours saw an actual 4ft+ wave show up at Angeles Point
 #   within a few hours (vs a much lower base rate otherwise).
+#
+# IMPORTANT: this uses the SPECTRAL PARTITION of each buoy's reading
+# (swell_height_ft/swell_period_s/swell_dir_deg from the .spec feed,
+# see noaa_client.fetch_buoy_spectral), not the blended WVHT/DPD/MWD
+# summary. NDBC's plain realtime2 summary mixes true swell (long-period
+# energy that traveled here from a distant wind event) together with
+# whatever local wind-chop happens to be hitting the buoy at that same
+# moment - correlating the BLENDED number between two buoys can hide or
+# distort the actual swell-to-swell relationship, since each buoy's
+# local wind chop is independent noise on top of the shared swell
+# signal. Using the swell-only partition at both ends isolates the one
+# component that actually propagates predictably down the strait.
 STRAIT_AXIS_BEARING_DEG = 292.8
 STRIKE_THRESHOLD = 10.0
 STRIKE_HIT_RATE_PCT = 44  # historical P(4ft+ at Angeles Pt | signal >= threshold)
+SWELL_DIR_MATCH_TOLERANCE_DEG = 30  # how close two buoys' swell directions must be to call it "the same train"
 
 
-def compute_strike_signal(neah_bay_obs: dict | None) -> dict | None:
+def compute_strike_signal(neah_bay_spec: dict | None) -> dict | None:
     """Compute the validated live strike-signal from a fresh Neah Bay
-    (46087) buoy reading. Returns None if Neah Bay has no usable wave
-    reading right now."""
-    if not neah_bay_obs:
+    (46087) spectral wave partition. Uses the SWELL component only
+    (swell_height_ft/swell_period_s/swell_dir_deg), not the blended
+    wave reading, so local wind-chop at Neah Bay doesn't inflate the
+    signal for a train that won't actually hold together down-strait.
+    Returns None if Neah Bay has no usable swell partition right now."""
+    if not neah_bay_spec:
         return None
-    height_ft = neah_bay_obs.get("wave_height_ft")
-    period_s = neah_bay_obs.get("dominant_period_s")
-    wave_dir = neah_bay_obs.get("wave_dir_deg")
+    height_ft = neah_bay_spec.get("swell_height_ft")
+    period_s = neah_bay_spec.get("swell_period_s")
+    wave_dir = neah_bay_spec.get("swell_dir_deg")
     if height_ft is None or wave_dir is None:
         return None
 
@@ -411,31 +427,86 @@ def compute_strike_signal(neah_bay_obs: dict | None) -> dict | None:
             if is_strike else
             "Not likely surfable right now based on live upwind conditions"
         ),
-        "neah_bay_wave_height_ft": height_ft,
-        "neah_bay_period_s": period_s,
-        "neah_bay_wave_dir_deg": wave_dir,
+        "neah_bay_swell_height_ft": height_ft,
+        "neah_bay_swell_period_s": period_s,
+        "neah_bay_swell_dir_deg": wave_dir,
         "angle_offset_from_axis_deg": round(angle_offset, 1),
         "strait_axis_bearing_deg": STRAIT_AXIS_BEARING_DEG,
         "period_bonus_applied": period_bonus > 1.0,
-        "observed_at": neah_bay_obs.get("observed_at"),
-        "source": "live_buoy_46087",
+        "observed_at": neah_bay_spec.get("observed_at"),
+        "source": "live_buoy_46087_swell_partition",
     }
 
 
-def build_current_conditions(spot: Spot, neah_bay_obs: dict | None, local_obs: dict | None) -> dict | None:
+def compute_swell_correlation(neah_bay_spec: dict | None, local_spec: dict | None) -> dict | None:
+    """Directly compare the SWELL partitions at Neah Bay (upwind) and
+    Angeles Point (local) to check whether they're actually the same
+    propagating wave train right now, rather than each buoy showing
+    an independent local wind-wave bump that happens to coincide. Two
+    readings are treated as "the same train" when their swell
+    directions agree within SWELL_DIR_MATCH_TOLERANCE_DEG - genuine
+    swell holds its direction across ~90km of open strait far better
+    than locally-generated chop does. When matched, reports the actual
+    live transmission ratio (how much of Neah Bay's swell height is
+    showing up at Angeles Point right now), which is the real-time
+    analog of the -9dB median energy loss found in the historical
+    analysis."""
+    if not neah_bay_spec or not local_spec:
+        return None
+    nb_h, nb_p, nb_d = neah_bay_spec.get("swell_height_ft"), neah_bay_spec.get("swell_period_s"), neah_bay_spec.get("swell_dir_deg")
+    lo_h, lo_p, lo_d = local_spec.get("swell_height_ft"), local_spec.get("swell_period_s"), local_spec.get("swell_dir_deg")
+    if nb_h is None or lo_h is None:
+        return None
+
+    dir_diff = _angle_diff(nb_d, lo_d) if (nb_d is not None and lo_d is not None) else None
+    same_train = dir_diff is not None and dir_diff <= SWELL_DIR_MATCH_TOLERANCE_DEG
+    transmission_pct = round((lo_h / nb_h) * 100, 1) if nb_h > 0 else None
+
+    return {
+        "neah_bay_swell_height_ft": nb_h,
+        "neah_bay_swell_period_s": nb_p,
+        "neah_bay_swell_dir_deg": nb_d,
+        "local_swell_height_ft": lo_h,
+        "local_swell_period_s": lo_p,
+        "local_swell_dir_deg": lo_d,
+        "direction_diff_deg": round(dir_diff, 1) if dir_diff is not None else None,
+        "same_train": same_train,
+        "transmission_pct": transmission_pct,
+        "note": (
+            "Same swell direction at both buoys - this is very likely the same wave "
+            "train that left Neah Bay and is now showing up at Angeles Point."
+            if same_train else
+            "Swell directions differ more than expected - the local reading may be "
+            "dominated by a different/local source rather than swell arriving from Neah Bay."
+        ),
+    }
+
+
+def build_current_conditions(
+    spot: Spot,
+    neah_bay_obs: dict | None,
+    local_obs: dict | None,
+    neah_bay_spec: dict | None = None,
+    local_spec: dict | None = None,
+) -> dict | None:
     """Assemble the full "Current Conditions" payload for the detail view:
     the validated strike-signal computed from the live upwind Neah Bay
-    reading (the leading indicator), plus the live local buoy reading at
-    Angeles Point as direct corroborating ground truth of what's actually
-    happening near the spot right now. Only meaningful for fetch_wind
-    strait spots that have both reference points configured."""
-    strike = compute_strike_signal(neah_bay_obs)
+    swell partition (the leading indicator), the live local buoy reading
+    at Angeles Point scored as direct ground truth, and a direct
+    swell-to-swell correlation between the two buoys' spectral
+    partitions so the UI can show whether what's arriving locally is
+    actually the same train seen upwind (vs. independent local
+    wind-chop). Only meaningful for fetch_wind strait spots that have
+    both reference points configured."""
+    strike = compute_strike_signal(neah_bay_spec)
+    correlation = compute_swell_correlation(neah_bay_spec, local_spec)
     local_live = score_live_wave_observation(spot, local_obs) if local_obs else None
     if local_live:
         local_live["label"] = label_for_score(local_live["score"])
-    if not strike and not local_live:
+    if not strike and not local_live and not correlation:
         return None
     return {
         "strike_signal": strike,
         "local_observation": local_live,
+        "swell_correlation": correlation,
     }
