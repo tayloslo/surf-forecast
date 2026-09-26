@@ -26,11 +26,12 @@ from spots_data import SPOTS, SPOTS_BY_ID
 from noaa_client import (
     fetch_marine_forecast, find_working_nearest_buoy, fetch_buoy_observation,
     fetch_tides_currents_wind, fetch_historical_observations, fetch_buoy_spectral,
+    fetch_historical_wave_observations,
 )
 from scoring import (
     score_hour, score_hour_fetch_wind, label_for_score, build_historical_fetch_profile,
     score_live_wave_observation, build_current_conditions, SWELL_PROPAGATION_LAG_HOURS,
-    scale_description_for_spot,
+    scale_description_for_spot, quality_factors_for_spot, build_local_swell_benchmark,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -54,6 +55,14 @@ _CACHE_TTL_S = 20 * 60  # 20 minutes
 # 20 minutes. Cache per upwind buoy id for much longer.
 _HIST_CACHE: dict[str, dict] = {}
 _HIST_CACHE_TTL_S = 6 * 60 * 60  # 6 hours
+
+# Same idea as _HIST_CACHE, but keyed on the LOCAL wave buoy (e.g. Angeles
+# Point/46267 for Elwha) rather than the upwind reference buoy - this is
+# the "how big has it actually gotten right at this spot, historically"
+# benchmark, which is a different buoy/question than the upwind fetch
+# calibration above.
+_LOCAL_BENCHMARK_CACHE: dict[str, dict] = {}
+_LOCAL_BENCHMARK_CACHE_TTL_S = 6 * 60 * 60  # 6 hours
 
 # Open-Meteo free tier rate-limits concurrent requests (429s if we fire
 # ~20 at once, as happens on first map load with an empty cache). Cap
@@ -118,6 +127,31 @@ async def _get_historical_profile(spot) -> dict | None:
         return None
     _HIST_CACHE[buoy_id] = {"fetched_at": now, "data": profile}
     return profile
+
+
+async def _get_local_swell_benchmark(spot) -> dict | None:
+    """Build (or return cached) an all-time-max/good-day benchmark from
+    the LOCAL wave buoy's own history (e.g. Angeles Point/46267 for
+    Elwha) - a different, more directly relevant question than the
+    upwind fetch-wind calibration: "how big has it actually gotten right
+    here, and how often does it cross into 'good' territory", since
+    local swell size is the dominant factor in whether this spot actually
+    breaks well."""
+    buoy_id = getattr(spot, "local_wave_buoy_id", None)
+    if not buoy_id:
+        return None
+    cached = _LOCAL_BENCHMARK_CACHE.get(buoy_id)
+    now = time.time()
+    if cached and (now - cached["fetched_at"]) < _LOCAL_BENCHMARK_CACHE_TTL_S:
+        return cached["data"]
+    try:
+        rows = await fetch_historical_wave_observations(buoy_id)
+        benchmark = build_local_swell_benchmark(rows)
+    except Exception:
+        log.exception("local swell benchmark fetch failed for buoy %s", buoy_id)
+        return None
+    _LOCAL_BENCHMARK_CACHE[buoy_id] = {"fetched_at": now, "data": benchmark}
+    return benchmark
 
 
 async def _get_scored_forecast(spot, days: int = 7) -> dict:
@@ -407,6 +441,28 @@ async def spot_detail(spot_id: int):
         result["scale_description"] = scale_description_for_spot(spot)
     except Exception:
         log.exception("scale description failed for spot %s", spot_id)
+
+    # Ranked explanation of which physical factors matter most for THIS
+    # spot's model (e.g. at Elwha: swell size at the local buoy first,
+    # then swell/wind direction via the bluff's shadowing effect, then
+    # wind speed/fetch as a secondary modulator) - lets the UI show WHY a
+    # score is what it is, not just the number.
+    try:
+        result["quality_factors"] = quality_factors_for_spot(spot)
+    except Exception:
+        log.exception("quality factors failed for spot %s", spot_id)
+
+    # All-time benchmark from the LOCAL wave buoy's own history (distinct
+    # from the upwind fetch-wind calibration above) - "how big has it
+    # actually gotten here" and how many days crossed the "starting to
+    # get good" swell-size threshold, since local swell size is the
+    # single most informative real-world stat for this spot.
+    try:
+        local_benchmark = await _get_local_swell_benchmark(spot)
+        if local_benchmark:
+            result["local_swell_benchmark"] = local_benchmark
+    except Exception:
+        log.exception("local swell benchmark failed for spot %s", spot_id)
 
     return result
 

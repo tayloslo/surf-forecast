@@ -102,6 +102,138 @@ def build_historical_fetch_profile(
     }
 
 
+# The Angeles Point buoy (46267) sits right off Elwha and is a much
+# better read on what this spot actually needs than the upwind Neah Bay
+# wind/fetch analysis alone: real swell height there correlates strongly
+# with what breaks at Elwha, so "how big has it actually gotten here" is
+# the single most informative historical stat for calibrating "what's a
+# big day" - more informative than any wind-speed bucket.
+GOOD_SWELL_HEIGHT_FT = 4.0  # user-identified threshold: 4ft+ at the local buoy starts to approach "good", conditional on angle/wind alignment
+
+
+def build_local_swell_benchmark(rows: list[dict], good_swell_height_ft: float = GOOD_SWELL_HEIGHT_FT) -> dict | None:
+    """From the LOCAL wave buoy's own history (Angeles Point/46267 for
+    Elwha, not the upwind Neah Bay reference), find the all-time max wave
+    height actually observed and how many days crossed the "starting to
+    get good" threshold - the real benchmark this spot should be judged
+    against, since local wave height is the dominant factor in whether
+    Elwha actually breaks well, well ahead of wind speed/fetch alone."""
+    if not rows:
+        return None
+    all_time_max = None
+    all_time_max_at = None
+    days: dict[str, float] = {}
+    for r in rows:
+        wave_ft = r.get("wave_height_ft")
+        observed_at = r.get("observed_at")
+        if wave_ft is None:
+            continue
+        if all_time_max is None or wave_ft > all_time_max:
+            all_time_max = wave_ft
+            all_time_max_at = observed_at
+        if observed_at:
+            day = observed_at[:10]
+            if wave_ft > days.get(day, 0.0):
+                days[day] = wave_ft
+    if all_time_max is None:
+        return None
+    good_days = sum(1 for v in days.values() if v >= good_swell_height_ft)
+    return {
+        "all_time_max_wave_height_ft": all_time_max,
+        "all_time_max_observed_at": all_time_max_at,
+        "good_swell_height_ft": good_swell_height_ft,
+        "total_days": len(days),
+        "days_at_or_above_good_swell": good_days,
+        "days_at_or_above_pct": round(good_days / len(days) * 100, 0) if days else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Ranked quality-factor legend, per scoring model. This is deliberately
+# separate from the numeric SCALE_DESCRIPTIONS bands above: those explain
+# what a given SCORE means, this explains WHY - which physical inputs
+# actually move the needle most, in priority order, so a user glancing at
+# the detail view understands what to look for themselves, not just what
+# number came out.
+#
+# For Elwha specifically: this is NOT a pure wind-fetch novelty wave (an
+# earlier, incomplete model treated it that way). Real swell size at the
+# Angeles Point buoy correlates strongly with what breaks at Elwha, so
+# swell HEIGHT is the dominant factor - by a wide margin - over wind
+# speed. Direction matters a lot too, but through a different mechanism
+# than open-coast angle-of-attack: Elwha sits behind a large bluff, so
+# one side of the point is sheltered/good and the other is shadowed out
+# depending on which way the swell/wind is coming from, similar to how a
+# point break works. Wind speed/fetch is real but secondary - it's what
+# turns a good swell into a clean vs. chopped-up version of itself,
+# not what determines whether there's a wave in the first place.
+# ---------------------------------------------------------------------------
+QUALITY_FACTORS = {
+    "fetch_wind": [
+        {
+            "factor": "Swell/wave size (Angeles Point buoy)",
+            "importance": "Most important",
+            "detail": (
+                "Real wave height at the nearby Angeles Point buoy (46267) correlates "
+                "strongly with what actually breaks at Elwha - this is the dominant factor, "
+                "more than wind speed. Under ~1.5ft: essentially flat. 4ft+ starts approaching "
+                "'good' territory here, but only IF direction and wind also line up (see below) - "
+                "size alone doesn't guarantee quality."
+            ),
+        },
+        {
+            "factor": "Swell/wind direction (bluff shadowing)",
+            "importance": "Very important",
+            "detail": (
+                "Elwha sits behind a large bluff - one side of the point is sheltered and clean, "
+                "the other gets shadowed out, depending on which way the swell/wind is coming "
+                "from. This works like a point break's angle-of-attack, not simple onshore/offshore: "
+                "the same swell size can be great on one side and blocked on the other."
+            ),
+        },
+        {
+            "factor": "Local wind speed/fetch",
+            "importance": "Secondary",
+            "detail": (
+                "Sustained westerly wind down the strait adds a local wind-driven wave on top of "
+                "whatever swell is already there, and determines whether conditions stay clean or "
+                "get chopped up. Real, but it modulates an existing swell more than it creates "
+                "surf on its own."
+            ),
+        },
+    ],
+    "swell": [
+        {
+            "factor": "Swell direction",
+            "importance": "Most important",
+            "detail": "No swell energy hitting this beach's window means no surf, regardless of size.",
+        },
+        {
+            "factor": "Swell period",
+            "importance": "Very important",
+            "detail": "Longer-period groundswell is organized and powerful; short-period windswell is mushy.",
+        },
+        {
+            "factor": "Swell height",
+            "importance": "Important",
+            "detail": "Too small means no surf; too big at this beach means blown out/unsafe.",
+        },
+        {
+            "factor": "Wind direction/speed",
+            "importance": "Secondary",
+            "detail": "Onshore wind degrades an existing swell; offshore/light wind grooms it.",
+        },
+    ],
+}
+
+
+def quality_factors_for_spot(spot: Spot) -> list[dict]:
+    """Ranked, human-readable explanation of which physical inputs matter
+    most for THIS spot's scoring model, in priority order."""
+    model = getattr(spot, "scoring_model", "swell")
+    return QUALITY_FACTORS.get(model, QUALITY_FACTORS["swell"])
+
+
 def _analyze_good_days(
     rows: list[dict], facing_direction: float, window_deg: float, min_wind_mph: float,
     good_wave_height_ft: float,

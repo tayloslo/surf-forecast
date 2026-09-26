@@ -178,14 +178,13 @@ async def fetch_buoy_observation(station_id: str) -> dict | None:
     return None
 
 
-async def fetch_historical_observations(station_id: str) -> list[dict]:
-    """Pull the full ~45-day realtime2 archive for a station (NDBC keeps a
-    rolling window, no separate 'historical' endpoint needed for this
-    horizon) and return every row with usable wind + wave data. This is
-    the raw material for calibrating the fetch-wind model: pairing what
-    the wind was actually doing with what wave height that produced at
-    the SAME buoy, so a future forecast wind can be compared against real
-    past analogs rather than a hand-tuned guess."""
+async def _fetch_realtime2_rows(station_id: str) -> list[dict]:
+    """Pull and parse the full ~45-day realtime2 archive for a station
+    (NDBC keeps a rolling window, no separate 'historical' endpoint
+    needed for this horizon), with no filtering beyond having a usable
+    wave height. Shared base for both historical-analysis paths below,
+    since some buoys (e.g. 46267, wave-only, no wind sensor) never have
+    wind data and would return nothing from a wind-filtered fetch."""
     url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id.lower()}.txt"
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         try:
@@ -198,9 +197,30 @@ async def fetch_historical_observations(station_id: str) -> list[dict]:
     rows = []
     for line in lines:
         obs = _parse_realtime2_line(station_id, line)
-        if obs and obs["wind_speed_mph"] is not None and obs["wind_dir_deg"] is not None:
+        if obs:
             rows.append(obs)
     return rows
+
+
+async def fetch_historical_observations(station_id: str) -> list[dict]:
+    """Pull the full ~45-day realtime2 archive for a station and return
+    every row with usable wind + wave data. This is the raw material for
+    calibrating the fetch-wind model: pairing what the wind was actually
+    doing with what wave height that produced at the SAME buoy, so a
+    future forecast wind can be compared against real past analogs
+    rather than a hand-tuned guess."""
+    rows = await _fetch_realtime2_rows(station_id)
+    return [r for r in rows if r["wind_speed_mph"] is not None and r["wind_dir_deg"] is not None]
+
+
+async def fetch_historical_wave_observations(station_id: str) -> list[dict]:
+    """Same ~45-day realtime2 archive, but only requires a usable wave
+    height - no wind filter. Needed for wave-only buoys (e.g. 46267 off
+    Elwha, which has no wind sensor onboard) where fetch_historical_observations
+    would always return an empty list. Used for the local swell-size
+    benchmark (build_local_swell_benchmark), which only ever looks at wave
+    height/day, not wind."""
+    return await _fetch_realtime2_rows(station_id)
 
 
 async def fetch_marine_forecast(lat: float, lon: float, days: int = 7) -> dict:

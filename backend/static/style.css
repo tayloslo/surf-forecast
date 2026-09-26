@@ -222,3 +222,42 @@ footer {
   opacity: 0.85;
   font-size: 0.8rem;
 }
+
+.factor-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.factor-rank {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--ocean-light);
+  font-size: 0.9rem;
+  width: 22px;
+}
+.factor-body { flex: 1 1 auto; }
+.factor-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 2px;
+}
+.factor-importance {
+  font-weight: 500;
+  font-size: 0.7rem;
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-left: 6px;
+}
+.factor-detail {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+.factor-benchmark {
+  background: var(--sand);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-top: 8px;
+  font-size: 0.8rem;
+}

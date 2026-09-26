@@ -141,6 +141,34 @@ async function openDetail(spotId) {
     </details>`;
   }
 
+  // Ranked "what actually matters" legend - which physical factors drive
+  // quality here, in priority order, plus (for spots with a nearby local
+  // wave buoy) the real all-time benchmark for this spot rather than an
+  // abstract number. This is deliberately separate from the scale bands
+  // above: that explains what a SCORE means, this explains WHY.
+  if (spot.quality_factors && spot.quality_factors.length) {
+    html += `<details class="scale-details">
+      <summary>What actually makes ${spot.name} good vs. poor?</summary>
+      ${spot.quality_factors.map((f, i) => `<div class="factor-row">
+        <span class="factor-rank">#${i + 1}</span>
+        <div class="factor-body">
+          <div class="factor-name">${f.factor} <span class="factor-importance">${f.importance}</span></div>
+          <div class="factor-detail">${f.detail}</div>
+        </div>
+      </div>`).join("")}
+      ${spot.local_swell_benchmark ? (() => {
+        const lb = spot.local_swell_benchmark;
+        return `<div class="factor-benchmark">
+          <strong>All-time (last ${lb.total_days} days, local buoy):</strong> biggest wave seen was
+          <strong>${lb.all_time_max_wave_height_ft}ft</strong>. Only <strong>${lb.days_at_or_above_good_swell}
+          of ${lb.total_days} days (${lb.days_at_or_above_pct}%)</strong> reached ${lb.good_swell_height_ft}ft+,
+          the size where it starts approaching "good" here &mdash; and even those still need direction/wind to
+          line up on top of size.
+        </div>`;
+      })() : ""}
+    </details>`;
+  }
+
   // ---------------------------------------------------------------
   // SECTION 1: Current Conditions - what the live buoys are reporting
   // RIGHT NOW, and whether that combination actually predicts a good
