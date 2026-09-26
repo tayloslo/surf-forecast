@@ -38,9 +38,16 @@ from database import Spot
 # its own scoring path rather than tuned swell parameters.
 # ---------------------------------------------------------------------------
 
+# A wave big enough to count as "there's a wave" at a fetch-limited strait
+# spot - deliberately low since these are wind-chop novelty waves, not
+# open-coast surf. Matches the DEFAULT_PREFS min_good_height_ft used by the
+# swell-scoring model, so "there's a wave" means the same thing app-wide.
+GOOD_WAVE_HEIGHT_FT = 1.5
+
+
 def build_historical_fetch_profile(
     rows: list[dict], facing_direction: float, window_deg: float, min_wind_mph: float,
-    bucket_size_mph: float = 5.0,
+    bucket_size_mph: float = 5.0, good_wave_height_ft: float = GOOD_WAVE_HEIGHT_FT,
 ) -> dict:
     """Turn a buoy's raw historical wind+wave rows into an empirical
     lookup: for wind blowing from a usable (aligned) direction, what wave
@@ -51,7 +58,13 @@ def build_historical_fetch_profile(
     Returns {bucket_low_mph: {"avg_wave_height_ft": float, "n": int,
     "max_wave_height_ft": float}}, plus a "max_period_s" key with the
     single highest dominant period seen in the whole window (any
-    direction) - useful context for how far real swell reaches in here.
+    direction) - useful context for how far real swell reaches in here -
+    and a "good_day_analysis" key (see _analyze_good_days) answering the
+    question a raw wave-height number alone can't: of the days that had a
+    wave big enough to notice, how many ALSO had wind actually blowing
+    from a usable direction at a usable speed at the same time, versus
+    being a wave that showed up from a misaligned/cross gust that wouldn't
+    have actually been rideable here.
     """
     buckets: dict[float, list[float]] = {}
     max_period = None
@@ -82,7 +95,62 @@ def build_historical_fetch_profile(
         }
         for bucket, vals in buckets.items()
     }
-    return {"buckets": profile, "bucket_size_mph": bucket_size_mph, "max_period_s": max_period}
+    good_day_analysis = _analyze_good_days(rows, facing_direction, window_deg, min_wind_mph, good_wave_height_ft)
+    return {
+        "buckets": profile, "bucket_size_mph": bucket_size_mph, "max_period_s": max_period,
+        "good_day_analysis": good_day_analysis,
+    }
+
+
+def _analyze_good_days(
+    rows: list[dict], facing_direction: float, window_deg: float, min_wind_mph: float,
+    good_wave_height_ft: float,
+) -> dict | None:
+    """Group historical hourly rows by calendar day and answer: of the
+    days that had a wave big enough to be worth noticing
+    (>= good_wave_height_ft at ANY hour that day), how many of those days
+    ALSO had wind blowing from a usable direction at a usable speed
+    during that same wave? A wave height reading alone doesn\'t tell you
+    whether the wind that produced it was actually aligned - a day could
+    show a "good" wave height from a stray cross-strait gust that would
+    have been a mess to ride, not a clean fetch-driven wave. This is the
+    overlap check: wave big enough AND wind aligned+strong enough, at the
+    SAME hour, on the SAME day."""
+    if not rows:
+        return None
+    days: dict[str, dict] = {}
+    for r in rows:
+        wave_ft = r.get("wave_height_ft")
+        observed_at = r.get("observed_at")
+        if wave_ft is None or not observed_at:
+            continue
+        day = observed_at[:10]
+        entry = days.setdefault(day, {"had_wave": False, "had_good_wind_with_wave": False, "max_wave_ft": 0.0})
+        if wave_ft > entry["max_wave_ft"]:
+            entry["max_wave_ft"] = wave_ft
+        if wave_ft < good_wave_height_ft:
+            continue
+        entry["had_wave"] = True
+        wdir = r.get("wind_dir_deg")
+        wspeed = r.get("wind_speed_mph")
+        if wdir is not None and wspeed is not None and \
+           _angle_diff(wdir, facing_direction) < window_deg and wspeed >= min_wind_mph:
+            entry["had_good_wind_with_wave"] = True
+
+    wave_days = [d for d in days.values() if d["had_wave"]]
+    good_days = [d for d in wave_days if d["had_good_wind_with_wave"]]
+    if not wave_days:
+        return {
+            "total_days": len(days), "wave_days": 0, "good_wind_days": 0, "good_wind_pct": None,
+            "good_wave_height_ft": good_wave_height_ft,
+        }
+    return {
+        "total_days": len(days),
+        "wave_days": len(wave_days),
+        "good_wind_days": len(good_days),
+        "good_wind_pct": round(len(good_days) / len(wave_days) * 100, 0),
+        "good_wave_height_ft": good_wave_height_ft,
+    }
 
 
 def _historical_lookup(profile: dict | None, wind_speed_mph: float) -> dict | None:
@@ -329,6 +397,62 @@ def label_for_score(score: float) -> str:
     if score >= 2:
         return "Poor"
     return "Flat"
+
+
+# ---------------------------------------------------------------------------
+# What the 0-10 scale actually MEANS, per scoring model. The generic
+# Epic/Good/Fair/Poor/Flat labels are useful shorthand, but on their own
+# they invite the wrong mental model for a fetch-limited wind-wave spot
+# like Elwha: "Epic" here does NOT mean "open-coast-quality groundswell",
+# it means "the local wind has built as much fetch-limited chop as this
+# spot can physically produce". Surfacing that distinction explicitly in
+# the UI (rather than leaving it implied) is the point of this function.
+# ---------------------------------------------------------------------------
+SCALE_DESCRIPTIONS = {
+    "fetch_wind": {
+        "model_note": (
+            "This spot never gets real ocean groundswell - it's ~50mi inside "
+            "the Strait of Juan de Fuca, too far for open-coast swell to survive "
+            "the trip (confirmed by 45 days of buoy history at the strait mouth "
+            "vs. further in). Every number on this scale is a locally wind-built, "
+            "fetch-limited wave, not a groundswell forecast."
+        ),
+        "bands": [
+            {"label": "Epic", "range": "8-10", "wave_ft": "~4-6ft+",
+             "meaning": "Strong sustained westerly wind (~22mph+) has had hours to build fetch down the whole strait, or a strike-signal swell event is layering on top. Rare - this buoy's own history puts most wind here around the 22mph bucket, not higher."},
+            {"label": "Good", "range": "6.5-7.9", "wave_ft": "~2.5-4ft",
+             "meaning": "Solid aligned westerly wind at/near the ~22mph ideal fetch speed, sustained for several hours upwind at Neah Bay. The most common \"actually worth going\" band for this spot."},
+            {"label": "Fair", "range": "4.5-6.4", "wave_ft": "~1.5-2.5ft",
+             "meaning": "Wind is aligned but on the light or short-duration side (~12-17mph), or strong but not sustained long enough to build full fetch yet. A small, textured wind-wave - ridable but unremarkable."},
+            {"label": "Poor", "range": "2-4.4", "wave_ft": "<1.5ft",
+             "meaning": "Wind is weak, misaligned (not blowing down-strait), or hasn't built fetch yet. Barely a ripple, if anything."},
+            {"label": "Flat", "range": "0-1.9", "wave_ft": "~0ft",
+             "meaning": "No usable wind-fetch at all - calm, wrong direction, or blowing up-strait (which kills the wave regardless of speed)."},
+        ],
+    },
+    "swell": {
+        "model_note": (
+            "Open-coast groundswell scoring: how directly the forecasted swell "
+            "lines up with this beach's preferred window, how organized (period) "
+            "it is, how big, and whether wind is grooming or blowing it out."
+        ),
+        "bands": [
+            {"label": "Epic", "range": "8-10", "meaning": "Well-aligned groundswell at a good size/period with clean (offshore/light) wind."},
+            {"label": "Good", "range": "6.5-7.9", "meaning": "Solid aligned swell, decent size and period, wind not too onshore."},
+            {"label": "Fair", "range": "4.5-6.4", "meaning": "Swell present but off-angle, undersized, short-period, or wind starting to affect it."},
+            {"label": "Poor", "range": "2-4.4", "meaning": "Weak/misaligned swell or onshore wind degrading what little there is."},
+            {"label": "Flat", "range": "0-1.9", "meaning": "Essentially no usable swell energy reaching this spot."},
+        ],
+    },
+}
+
+
+def scale_description_for_spot(spot: Spot) -> dict:
+    """Return the 0-10 scale explanation appropriate to this spot's
+    scoring model, so the UI can show what the number actually means
+    here instead of a one-size-fits-all label."""
+    model = getattr(spot, "scoring_model", "swell")
+    return SCALE_DESCRIPTIONS.get(model, SCALE_DESCRIPTIONS["swell"])
 
 
 def score_live_wave_observation(spot: Spot, obs: dict) -> dict | None:

@@ -30,6 +30,7 @@ from noaa_client import (
 from scoring import (
     score_hour, score_hour_fetch_wind, label_for_score, build_historical_fetch_profile,
     score_live_wave_observation, build_current_conditions, SWELL_PROPAGATION_LAG_HOURS,
+    scale_description_for_spot,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -389,9 +390,23 @@ async def spot_detail(spot_id: int):
                     "reference_buoy_id": spot.nearest_buoy_id,
                     "max_period_s_observed": profile.get("max_period_s"),
                     "analog_buckets": len(profile.get("buckets", {})),
+                    # How many of the historically "there's a wave" days
+                    # also had wind actually aligned+strong enough to have
+                    # produced it, vs. a stray misaligned gust - answers
+                    # "of the days with waves, how many were actually
+                    # good?" using this buoy's own realtime2 history.
+                    "good_day_analysis": profile.get("good_day_analysis"),
                 }
         except Exception:
             log.exception("historical profile summary failed for spot %s", spot_id)
+
+    # Spot-specific explanation of what the 0-10 scale actually means here
+    # (e.g. Elwha's fetch-limited wind-wave scale is NOT a groundswell
+    # scale) - the UI shows this so the number isn't taken out of context.
+    try:
+        result["scale_description"] = scale_description_for_spot(spot)
+    except Exception:
+        log.exception("scale description failed for spot %s", spot_id)
 
     return result
 

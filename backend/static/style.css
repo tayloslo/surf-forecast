@@ -171,3 +171,54 @@ footer {
   font-size: 0.82rem;
   margin: 2px 0 8px;
 }
+
+.scale-legend {
+  margin: 4px 0 14px;
+}
+.scale-gradient-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(to right, #c0492c, #d4a017, #1e9e5a);
+}
+.scale-gradient-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  opacity: 0.6;
+  margin-top: 3px;
+}
+
+.scale-details {
+  margin-bottom: 16px;
+  font-size: 0.82rem;
+}
+.scale-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ocean);
+  padding: 4px 0;
+}
+.scale-model-note {
+  opacity: 0.75;
+  margin: 6px 0 10px;
+  font-size: 0.82rem;
+}
+.scale-band-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.scale-band-label {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.scale-band-meaning {
+  opacity: 0.85;
+  font-size: 0.8rem;
+}

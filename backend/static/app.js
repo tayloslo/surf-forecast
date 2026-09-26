@@ -21,11 +21,41 @@ function scoreClass(label) {
   return "unknown";
 }
 
-function makeDotIcon(label) {
+// Continuous 0-10 color scale (poor-red -> fair-yellow -> good-green), so
+// two "Fair" hours that are actually 4.6 vs 6.4 don't render visually
+// identical - a quick glance at hue/shade should track the real number,
+// not just which of 4 coarse buckets it falls in. Interpolates through
+// the same brand colors used by the discrete badges so the two systems
+// read as one consistent scale, just finer-grained.
+const SCALE_STOPS = [
+  { at: 0, rgb: [192, 73, 44] },   // poor/flat red
+  { at: 5, rgb: [212, 160, 23] },  // fair yellow
+  { at: 10, rgb: [30, 158, 90] },  // good green
+];
+function scoreColor(score) {
+  if (score == null) return "#8a94a3"; // --unknown
+  const s = Math.max(0, Math.min(10, score));
+  let lo = SCALE_STOPS[0], hi = SCALE_STOPS[SCALE_STOPS.length - 1];
+  for (let i = 0; i < SCALE_STOPS.length - 1; i++) {
+    if (s >= SCALE_STOPS[i].at && s <= SCALE_STOPS[i + 1].at) {
+      lo = SCALE_STOPS[i]; hi = SCALE_STOPS[i + 1]; break;
+    }
+  }
+  const span = hi.at - lo.at || 1;
+  const t = (s - lo.at) / span;
+  const rgb = lo.rgb.map((c, i) => Math.round(c + (hi.rgb[i] - c) * t));
+  return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+}
+
+function makeDotIcon(label, score) {
+  const color = score != null ? scoreColor(score) : null;
   const cls = scoreClass(label);
+  const style = color
+    ? `width:16px;height:16px;border-radius:50%;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);background:${color};`
+    : `width:16px;height:16px;border-radius:50%;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);`;
   return L.divIcon({
     className: "",
-    html: `<div class="spot-dot-${cls}" style="width:16px;height:16px;border-radius:50%;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);"></div>`,
+    html: `<div class="spot-dot-${cls}" style="${style}"></div>`,
     iconSize: [16, 16],
     iconAnchor: [8, 8],
   });
@@ -35,7 +65,7 @@ async function loadSpots() {
   const res = await fetch(`${API_BASE}/api/spots`);
   const spots = await res.json();
   spots.forEach((spot) => {
-    const marker = L.marker([spot.lat, spot.lon], { icon: makeDotIcon(spot.current_label) }).addTo(map);
+    const marker = L.marker([spot.lat, spot.lon], { icon: makeDotIcon(spot.current_label, spot.current_score) }).addTo(map);
     marker.bindTooltip(`${spot.name} — ${spot.current_label}${spot.current_score != null ? " (" + spot.current_score + "/10)" : ""}`);
     marker.on("click", () => openDetail(spot.id));
   });
@@ -87,6 +117,29 @@ async function openDetail(spotId) {
     <h2>${spot.name}</h2>
     ${headline ? `<span class="score-badge badge-${headlineCls}">${headline.label} &middot; ${headline.score}/10 right now</span>` : ""}
   </div>`;
+
+  // Color-scale legend + spot-specific explanation of what the 0-10
+  // number actually means here. Kept together right under the header so
+  // it's the first thing read before diving into either section below -
+  // a "7/10" means something very different at a wind-fetch novelty spot
+  // like Elwha than at an open-coast swell break, and that shouldn't be
+  // left implicit.
+  html += `<div class="scale-legend">
+    <div class="scale-gradient-bar"></div>
+    <div class="scale-gradient-labels"><span>0 Flat</span><span>5 Fair</span><span>10 Epic</span></div>
+  </div>`;
+
+  if (spot.scale_description) {
+    const sd = spot.scale_description;
+    html += `<details class="scale-details">
+      <summary>What does this spot's 0-10 scale mean?</summary>
+      <div class="scale-model-note">${sd.model_note}</div>
+      ${sd.bands.map((b) => `<div class="scale-band-row">
+        <span class="scale-band-label badge-${scoreClass(b.label)}">${b.label} &middot; ${b.range}</span>
+        <span class="scale-band-meaning">${b.wave_ft ? `<strong>${b.wave_ft}</strong> &mdash; ` : ""}${b.meaning}</span>
+      </div>`).join("")}
+    </details>`;
+  }
 
   // ---------------------------------------------------------------
   // SECTION 1: Current Conditions - what the live buoys are reporting
@@ -170,12 +223,20 @@ async function openDetail(spotId) {
 
   if (spot.historical_profile_summary) {
     const hp = spot.historical_profile_summary;
+    const gd = hp.good_day_analysis;
     html += `<div class="buoy-box" style="opacity:0.85;">
       <h4>Historical calibration (buoy ${hp.reference_buoy_id})</h4>
       <div>Max swell period seen in last ~45 days: ${hp.max_period_s_observed ?? "?"} s
         (confirms groundswell doesn't reach this far into the strait)</div>
       <div>Forecast wind speeds are compared against ${hp.analog_buckets} real historical
         wind-speed buckets from this buoy's own wind/wave record.</div>
+      ${gd && gd.wave_days ? `<div style="margin-top:6px;">Of the last ${gd.total_days} days,
+        <strong>${gd.wave_days}</strong> had a wave &ge; ${gd.good_wave_height_ft}ft at some point &mdash;
+        but wind was only actually aligned+strong enough to have produced it on
+        <strong>${gd.good_wind_days} of those (${gd.good_wind_pct}%)</strong>. The rest likely came from a
+        misaligned or short-lived gust, not a clean fetch-driven wave.</div>` : ""}
+      ${gd && !gd.wave_days ? `<div style="margin-top:6px;">No day in the last ${gd.total_days} had a wave
+        &ge; ${gd.good_wave_height_ft}ft at this buoy.</div>` : ""}
     </div>`;
   }
 
@@ -187,7 +248,6 @@ async function openDetail(spotId) {
       html += `<div class="day-group"><h4>${fmtDay(day)}</h4>`;
       // Show every 3rd hour to keep it scannable
       hours.filter((_, i) => i % 3 === 0).forEach((h) => {
-        const cls = scoreClass(h.label);
         let detail;
         if (h.model === "fetch_wind") {
           detail = `wind ${h.wind_speed_mph?.toFixed(0) ?? "?"}mph @ ${h.wind_dir_deg?.toFixed(0) ?? "?"}\u00b0 (fetch-driven wave)`;
@@ -204,7 +264,7 @@ async function openDetail(spotId) {
         }
         html += `<div class="hour-row">
           <span class="hour-time">${fmtTime(h.time)}</span>
-          <span class="hour-score-dot spot-dot-${cls}"></span>
+          <span class="hour-score-dot" style="background:${scoreColor(h.score)}"></span>
           <span class="hour-detail">${detail}</span>
           <span class="hour-label">${h.score}</span>
         </div>`;
