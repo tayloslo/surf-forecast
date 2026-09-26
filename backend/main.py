@@ -108,6 +108,24 @@ async def _fetch_upwind_with_retry(spot, days: int, attempts: int = 4):
         await asyncio.sleep(wait)
 
 
+async def _fetch_point_with_retry(lat: float, lon: float, days: int, attempts: int = 4):
+    """Same throttled/retried fetch as _fetch_with_retry/_fetch_upwind_with_retry,
+    but for an arbitrary lat/lon rather than a configured spot - used by the
+    swell-window map overlay, which samples points along the strait axis that
+    are not backed by a Spot object."""
+    for attempt in range(attempts):
+        async with _FETCH_SEMAPHORE:
+            try:
+                return await fetch_marine_forecast(lat, lon, days=days)
+            except Exception as e:
+                if attempt == attempts - 1:
+                    raise
+                is_429 = "429" in str(e)
+                wait = (2 ** attempt) if is_429 else 0.5
+                log.warning("swell window point fetch retry %s/%s for (%.3f,%.3f) (%s)", attempt + 1, attempts, lat, lon, e)
+        await asyncio.sleep(wait)
+
+
 async def _get_transmission_model(spot) -> dict | None:
     """Build (or return cached) the empirical swell-transmission model
     (see build_swell_transmission_model) for a fetch_wind spot that has
@@ -287,6 +305,15 @@ _SWELL_WINDOW_POINTS = [
 ]
 
 
+# The map overlay re-fetches this on every toggle-on click, and Open-Meteo's
+# free tier is a shared pool that other apps hit too - cache each point's
+# result briefly so repeated toggles/page loads don't multiply outbound calls,
+# and so a transient 429 doesn't blank the whole overlay if we fetched fine a
+# few minutes ago.
+_SWELL_WINDOW_CACHE: dict[str, dict] = {}
+_SWELL_WINDOW_CACHE_TTL_S = 10 * 60  # 10 minutes - forecast barely moves faster than this anyway
+
+
 @app.get("/api/swell-window")
 async def swell_window():
     """Current + a few hours of Open-Meteo swell forecast at a line of
@@ -303,11 +330,15 @@ async def swell_window():
         points.append({**p, "lat": lat, "lon": lon})
 
     async def fetch_one(p):
+        cache_key = p["label"]
+        cached = _SWELL_WINDOW_CACHE.get(cache_key)
+        now = time.time()
+        if cached and (now - cached["fetched_at"]) < _SWELL_WINDOW_CACHE_TTL_S:
+            return cached["data"]
         try:
-            async with _FETCH_SEMAPHORE:
-                forecast = await fetch_marine_forecast(p["lat"], p["lon"], days=2)
+            forecast = await _fetch_point_with_retry(p["lat"], p["lon"], days=2)
             hour0 = forecast["hours"][0] if forecast.get("hours") else None
-            return {
+            result = {
                 "label": p["label"],
                 "lat": p["lat"],
                 "lon": p["lon"],
@@ -317,8 +348,16 @@ async def swell_window():
                 "swell_dir_deg": hour0.get("swell_dir_deg") if hour0 else None,
                 "time": hour0.get("time") if hour0 else None,
             }
+            _SWELL_WINDOW_CACHE[cache_key] = {"fetched_at": now, "data": result}
+            return result
         except Exception:
             log.exception("swell window point fetch failed for %s", p["label"])
+            if cached:
+                # Stale cache beats a blank dot - still label it so the UI can
+                # note the data is aged if it wants to.
+                stale = dict(cached["data"])
+                stale["stale"] = True
+                return stale
             return {"label": p["label"], "lat": p["lat"], "lon": p["lon"], "distance_nm": p["distance_nm"], "error": True}
 
     results = await asyncio.gather(*(fetch_one(p) for p in points))
