@@ -66,7 +66,7 @@ SPOTS = [
     # Local ground truth = NOAA tide station 9444090, Port Angeles, about
     # 9km from the spot (no NDBC wave buoy sits right at Elwha itself).
     {
-        "name": "Elwha, WA", "lat": 48.1497, "lon": -123.5614,
+        "name": "Elwha, WA", "lat": 48.1494, "lon": -123.5660,
         "facing_direction": 270, "swell_window_deg": 45,
         "scoring_model": "fetch_wind",
         "upwind_lat": 48.493, "upwind_lon": -124.727,
