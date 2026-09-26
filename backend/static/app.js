@@ -75,7 +75,11 @@ async function openDetail(spotId) {
   // beats a modeled wind guess for the current instant.
   const cc = spot.current_conditions;
   const liveLocal = cc && cc.local_observation ? cc.local_observation : null;
-  const fallback = spot.forecast && spot.forecast.length ? spot.forecast[0] : null;
+  // spot.forecast[0] is always midnight of the oldest requested day
+  // (almost always the flat overnight hour) - use the server's actual
+  // nearest-to-now pick as the fallback instead, so the header never
+  // shows a stale/flat score just because the live buoy fetch hiccuped.
+  const fallback = spot.current_hour || (spot.forecast && spot.forecast.length ? spot.forecast[0] : null);
   const headline = liveLocal || fallback;
   const headlineCls = headline ? scoreClass(headline.label) : "unknown";
 

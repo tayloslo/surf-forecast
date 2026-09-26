@@ -262,6 +262,13 @@ async def spot_detail(spot_id: int):
         scored = await _get_scored_forecast(spot)
         result["forecast"] = scored["hours"]
         result["forecast_fetched_at"] = scored["fetched_at"]
+        # The forecast array always starts at midnight of the oldest
+        # requested day (Open-Meteo returns a full day from 00:00), so
+        # forecast[0] is essentially always the flat overnight hour, not
+        # "now" - expose the actual nearest-to-now hour explicitly so the
+        # frontend has a real fallback if live buoy data is unavailable,
+        # instead of defaulting to that always-flat first hour.
+        result["current_hour"] = _current_hour_score(scored)
     except Exception as e:
         log.exception("forecast fetch failed for spot %s", spot_id)
         result["forecast_error"] = f"Could not load forecast right now: {e}"
