@@ -1,0 +1,74 @@
+[
+  {
+    "id": 1,
+    "peak_date": "2023-02-21",
+    "peak_at": "2023-02-21T12:30:00Z",
+    "wave_height_ft": 13.1,
+    "period_s": 11.76,
+    "dir_deg": 300.0,
+    "image": "storm_1_20230221.png"
+  },
+  {
+    "id": 2,
+    "peak_date": "2021-03-29",
+    "peak_at": "2021-03-29T06:30:00Z",
+    "wave_height_ft": 12.4,
+    "period_s": 9.09,
+    "dir_deg": 278.0,
+    "image": "storm_2_20210329.png"
+  },
+  {
+    "id": 3,
+    "peak_date": "2024-01-10",
+    "peak_at": "2024-01-10T02:30:00Z",
+    "wave_height_ft": 12.0,
+    "period_s": 11.76,
+    "dir_deg": 295.0,
+    "image": "storm_3_20240110.png"
+  },
+  {
+    "id": 4,
+    "peak_date": "2024-11-05",
+    "peak_at": "2024-11-05T00:30:00Z",
+    "wave_height_ft": 10.8,
+    "period_s": 10.53,
+    "dir_deg": 300.0,
+    "image": "storm_4_20241105.png"
+  },
+  {
+    "id": 5,
+    "peak_date": "2025-04-20",
+    "peak_at": "2025-04-20T01:30:00Z",
+    "wave_height_ft": 10.5,
+    "period_s": 9.09,
+    "dir_deg": 295.0,
+    "image": "storm_5_20250420.png"
+  },
+  {
+    "id": 6,
+    "peak_date": "2022-11-05",
+    "peak_at": "2022-11-05T05:30:00Z",
+    "wave_height_ft": 10.4,
+    "period_s": 7.69,
+    "dir_deg": 291.0,
+    "image": "storm_6_20221105.png"
+  },
+  {
+    "id": 7,
+    "peak_date": "2023-02-14",
+    "peak_at": "2023-02-14T06:00:00Z",
+    "wave_height_ft": 10.0,
+    "period_s": 11.11,
+    "dir_deg": 289.0,
+    "image": "storm_7_20230214.png"
+  },
+  {
+    "id": 8,
+    "peak_date": "2024-05-22",
+    "peak_at": "2024-05-22T12:30:00Z",
+    "wave_height_ft": 9.8,
+    "period_s": 10.0,
+    "dir_deg": 299.0,
+    "image": "storm_8_20240522.png"
+  }
+]

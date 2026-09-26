@@ -16,9 +16,21 @@
   <main>
     <div id="map"></div>
 
+    <div id="map-controls">
+      <button id="swell-overlay-btn" class="map-btn">Show swell overlay</button>
+      <button id="storm-archive-btn" class="map-btn">Storm archive</button>
+    </div>
+
     <aside id="detail-panel" class="hidden">
       <button id="close-panel-btn" class="link-btn">&times; Close</button>
       <div id="detail-content">Loading...</div>
+    </aside>
+
+    <aside id="storm-archive-panel" class="hidden">
+      <button id="close-storm-archive-btn" class="link-btn">&times; Close</button>
+      <h3>Storm archive &mdash; biggest recorded swells at the Port Angeles / Angeles Point buoy</h3>
+      <p class="section-sub">Each chart shows the local wave height building through the event alongside the upwind Neah Bay wave height + wind that produced it, from the 2020-present NDBC buoy archive.</p>
+      <div id="storm-archive-content">Loading...</div>
     </aside>
   </main>
 

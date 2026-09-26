@@ -61,6 +61,166 @@ function makeDotIcon(label, score) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Swell window overlay: the Strait of Juan de Fuca's actual "swell
+// window" - the wedge of open Pacific a storm's swell has to be sitting
+// in for its energy to funnel down the strait toward Elwha at all,
+// centered on the validated strait axis bearing (292.8deg, matching
+// scoring.py's STRAIT_AXIS_BEARING_DEG) with a +/-45deg cone (matching
+// Elwha's own swell_window_deg). Drawn once at page load since the
+// window's geometry is fixed - only what's happening WITHIN it changes,
+// which is what the swell-window forecast points (below) are for.
+// ---------------------------------------------------------------------------
+const STRAIT_AXIS_BEARING_DEG = 292.8;
+const SWELL_WINDOW_HALF_ANGLE_DEG = 45;
+const STRAIT_MOUTH = [48.493, -124.727]; // Neah Bay, at the strait's entrance
+const SWELL_WINDOW_RADIUS_NM = 200;
+
+function destinationPoint(lat, lon, bearingDeg, distanceNm) {
+  const R_KM = 6371.0;
+  const distKm = distanceNm * 1.852;
+  const lat1 = (lat * Math.PI) / 180, lon1 = (lon * Math.PI) / 180, brng = (bearingDeg * Math.PI) / 180;
+  const dR = distKm / R_KM;
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dR) + Math.cos(lat1) * Math.sin(dR) * Math.cos(brng));
+  const lon2 = lon1 + Math.atan2(Math.sin(brng) * Math.sin(dR) * Math.cos(lat1), Math.cos(dR) - Math.sin(lat1) * Math.sin(lat2));
+  return [(lat2 * 180) / Math.PI, (lon2 * 180) / Math.PI];
+}
+
+function drawSwellWindow() {
+  // A wedge/cone of points from the strait mouth out into the Pacific,
+  // spanning the swell window's angular width, so the map shows the
+  // actual geographic "window" a storm's swell needs to sit inside -
+  // not just a single upwind reference dot.
+  const points = [STRAIT_MOUTH];
+  const steps = 24;
+  for (let i = 0; i <= steps; i++) {
+    const bearing = STRAIT_AXIS_BEARING_DEG - SWELL_WINDOW_HALF_ANGLE_DEG + (2 * SWELL_WINDOW_HALF_ANGLE_DEG * i) / steps;
+    points.push(destinationPoint(STRAIT_MOUTH[0], STRAIT_MOUTH[1], bearing, SWELL_WINDOW_RADIUS_NM));
+  }
+  points.push(STRAIT_MOUTH);
+
+  L.polygon(points, {
+    color: "#4fa8d8",
+    weight: 1.5,
+    fillColor: "#4fa8d8",
+    fillOpacity: 0.08,
+    dashArray: "4,5",
+  }).addTo(map).bindTooltip(
+    "Swell window: the wedge of open Pacific a storm needs to sit in for its swell to funnel down the Strait of Juan de Fuca toward Elwha (±" +
+    SWELL_WINDOW_HALF_ANGLE_DEG + "° off the " + STRAIT_AXIS_BEARING_DEG + "° strait axis).",
+    { sticky: true }
+  );
+
+  // Axis centerline, for a quick visual read on "dead-on" vs "off-axis".
+  const axisEnd = destinationPoint(STRAIT_MOUTH[0], STRAIT_MOUTH[1], STRAIT_AXIS_BEARING_DEG, SWELL_WINDOW_RADIUS_NM);
+  L.polyline([STRAIT_MOUTH, axisEnd], { color: "#4fa8d8", weight: 1, dashArray: "2,6", opacity: 0.6 }).addTo(map);
+}
+
+// ---------------------------------------------------------------------------
+// Swell-window forecast overlay: live/current Open-Meteo swell readings
+// at a handful of points strung along the strait axis (from well
+// offshore, through the mouth, to partway down-strait) - lets you
+// actually SEE a storm's swell sitting in (or missing) the window,
+// rather than only reading numbers in the Elwha detail panel. Refreshed
+// on demand via the "Show swell overlay" toggle rather than always-on,
+// since it costs several outbound Open-Meteo calls.
+// ---------------------------------------------------------------------------
+let swellOverlayMarkers = [];
+let swellOverlayOn = false;
+
+function swellDotColor(heightFt) {
+  if (heightFt == null) return "#8a94a3";
+  if (heightFt >= 8) return "#c0492c";
+  if (heightFt >= 4) return "#d4a017";
+  if (heightFt >= 1.5) return "#1e9e5a";
+  return "#4fa8d8";
+}
+
+async function toggleSwellOverlay() {
+  const btn = document.getElementById("swell-overlay-btn");
+  if (swellOverlayOn) {
+    swellOverlayMarkers.forEach((m) => map.removeLayer(m));
+    swellOverlayMarkers = [];
+    swellOverlayOn = false;
+    btn.textContent = "Show swell overlay";
+    return;
+  }
+  btn.textContent = "Loading swell overlay...";
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${API_BASE}/api/swell-window`);
+    const data = await res.json();
+    data.points.forEach((p) => {
+      if (p.error) return;
+      const radius = 8 + Math.min(14, (p.swell_height_ft || 0) * 2);
+      const marker = L.circleMarker([p.lat, p.lon], {
+        radius,
+        color: "white",
+        weight: 2,
+        fillColor: swellDotColor(p.swell_height_ft),
+        fillOpacity: 0.85,
+      }).addTo(map);
+      marker.bindTooltip(
+        `<strong>${p.label}</strong><br>${p.swell_height_ft ?? "?"}ft @ ${p.swell_period_s ?? "?"}s from ${p.swell_dir_deg ?? "?"}°`
+      );
+      // A small arrow-like line showing swell travel direction (points
+      // FROM where it's coming FROM, i.e. reversed from met convention,
+      // toward the strait) makes the direction number visually legible
+      // at a glance instead of only in the tooltip.
+      if (p.swell_dir_deg != null) {
+        const arrowEnd = destinationPoint(p.lat, p.lon, (p.swell_dir_deg + 180) % 360, 8);
+        L.polyline([[p.lat, p.lon], arrowEnd], { color: swellDotColor(p.swell_height_ft), weight: 2, opacity: 0.7 }).addTo(map);
+        swellOverlayMarkers.push(L.polyline([[p.lat, p.lon], arrowEnd]));
+      }
+      swellOverlayMarkers.push(marker);
+    });
+    swellOverlayOn = true;
+    btn.textContent = "Hide swell overlay";
+  } catch (e) {
+    console.error("swell overlay failed", e);
+    btn.textContent = "Show swell overlay (failed, retry)";
+  }
+  btn.disabled = false;
+}
+
+drawSwellWindow();
+document.getElementById("swell-overlay-btn").addEventListener("click", toggleSwellOverlay);
+
+// ---------------------------------------------------------------------------
+// Storm archive gallery: screenshots of the biggest distinct swell
+// events actually recorded at the local Angeles Point buoy, each with
+// the local + upwind Neah Bay buoy traces through the event - concrete
+// "here's what a real big day has looked like" reference alongside the
+// live map/forecast.
+// ---------------------------------------------------------------------------
+async function openStormArchive() {
+  const panel = document.getElementById("storm-archive-panel");
+  const content = document.getElementById("storm-archive-content");
+  panel.classList.remove("hidden");
+  content.innerHTML = "Loading...";
+  try {
+    const res = await fetch(`${API_BASE}/api/storm-archive`);
+    const data = await res.json();
+    if (!data.storms || !data.storms.length) {
+      content.innerHTML = "<p>No storm archive available.</p>";
+      return;
+    }
+    content.innerHTML = data.storms.map((s) => `
+      <div class="storm-card">
+        <h4>#${s.id} &middot; ${s.peak_date} &middot; ${s.wave_height_ft}ft @ ${s.period_s ?? "?"}s from ${s.dir_deg ?? "?"}°</h4>
+        <img src="${s.image_url}" alt="Storm ${s.id} buoy trace" loading="lazy">
+      </div>
+    `).join("");
+  } catch (e) {
+    content.innerHTML = "<p class=\"error-msg\">Failed to load storm archive.</p>";
+  }
+}
+
+document.getElementById("storm-archive-btn").addEventListener("click", openStormArchive);
+document.getElementById("close-storm-archive-btn").addEventListener("click", () => {
+  document.getElementById("storm-archive-panel").classList.add("hidden");
+});
+
 async function loadSpots() {
   const res = await fetch(`${API_BASE}/api/spots`);
   const spots = await res.json();

@@ -16,7 +16,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+import json
 import logging
+import math
 import os
 import time
 import asyncio
@@ -240,6 +242,108 @@ def _current_hour_score(scored: dict) -> dict | None:
 @app.get("/api/health")
 def health():
     return {"status": "ok", "spot_count": len(SPOTS)}
+
+
+# ---------------------------------------------------------------------------
+# Swell window / strait overlay: a handful of points running from the
+# Pacific (offshore of Neah Bay, at the strait's mouth) down the strait
+# axis toward Elwha, each queried against Open-Meteo's marine forecast so
+# the map can render "what does the current storm look like as it enters
+# the swell window" rather than only the single upwind reference point
+# already used for scoring. This is deliberately a small, fixed set of
+# points (not a dense grid) - Open-Meteo's free tier only tolerates a
+# handful of concurrent requests, and a handful spaced along the strait
+# axis is enough to visualize a storm's shape/size/direction on approach.
+_STRAIT_MOUTH = (48.493, -124.727)  # Neah Bay, at the strait's entrance
+
+
+def _destination_point(lat: float, lon: float, bearing_deg: float, distance_nm: float) -> tuple[float, float]:
+    """Great-circle destination point given a start, bearing, and
+    distance (nautical miles) - used to lay out points along the strait
+    axis without hand-typing each lat/lon."""
+    r_km = 6371.0
+    dist_km = distance_nm * 1.852
+    lat1, lon1, brng = math.radians(lat), math.radians(lon), math.radians(bearing_deg)
+    d_r = dist_km / r_km
+    lat2 = math.asin(math.sin(lat1) * math.cos(d_r) + math.cos(lat1) * math.sin(d_r) * math.cos(brng))
+    lon2 = lon1 + math.atan2(
+        math.sin(brng) * math.sin(d_r) * math.cos(lat1), math.cos(d_r) - math.sin(lat1) * math.sin(lat2),
+    )
+    return round(math.degrees(lat2), 4), round(math.degrees(lon2), 4)
+
+
+# Distances offshore of the strait mouth (nautical miles) along the axis
+# reciprocal bearing (i.e. heading OUT into the Pacific, away from the
+# strait) where we sample the swell field - out to ~180nm covers where a
+# typical Pacific storm's fetch sits relative to the strait's swell
+# window, plus the mouth itself and partway down-strait toward Elwha.
+_SWELL_WINDOW_POINTS = [
+    {"label": "Elwha (down-strait)", "distance_nm": -25, "bearing_deg": (STRAIT_AXIS_BEARING_DEG + 180) % 360},
+    {"label": "Strait mouth (Neah Bay)", "distance_nm": 0, "bearing_deg": STRAIT_AXIS_BEARING_DEG},
+    {"label": "30nm offshore", "distance_nm": 30, "bearing_deg": STRAIT_AXIS_BEARING_DEG},
+    {"label": "70nm offshore", "distance_nm": 70, "bearing_deg": STRAIT_AXIS_BEARING_DEG},
+    {"label": "120nm offshore", "distance_nm": 120, "bearing_deg": STRAIT_AXIS_BEARING_DEG},
+    {"label": "180nm offshore", "distance_nm": 180, "bearing_deg": STRAIT_AXIS_BEARING_DEG},
+]
+
+
+@app.get("/api/swell-window")
+async def swell_window():
+    """Current + a few hours of Open-Meteo swell forecast at a line of
+    points running from offshore of the Pacific, in through the strait's
+    mouth, to partway down-strait toward Elwha - the actual "swell
+    window" this model's transmission logic depends on. Lets the map
+    show where a storm's swell currently sits relative to the strait
+    mouth, visually, instead of only a single upwind reference point."""
+    points = []
+    for p in _SWELL_WINDOW_POINTS:
+        lat, lon = _destination_point(
+            _STRAIT_MOUTH[0], _STRAIT_MOUTH[1], p["bearing_deg"], abs(p["distance_nm"]),
+        )
+        points.append({**p, "lat": lat, "lon": lon})
+
+    async def fetch_one(p):
+        try:
+            async with _FETCH_SEMAPHORE:
+                forecast = await fetch_marine_forecast(p["lat"], p["lon"], days=2)
+            hour0 = forecast["hours"][0] if forecast.get("hours") else None
+            return {
+                "label": p["label"],
+                "lat": p["lat"],
+                "lon": p["lon"],
+                "distance_nm": p["distance_nm"],
+                "swell_height_ft": hour0.get("swell_height_ft") if hour0 else None,
+                "swell_period_s": hour0.get("swell_period_s") if hour0 else None,
+                "swell_dir_deg": hour0.get("swell_dir_deg") if hour0 else None,
+                "time": hour0.get("time") if hour0 else None,
+            }
+        except Exception:
+            log.exception("swell window point fetch failed for %s", p["label"])
+            return {"label": p["label"], "lat": p["lat"], "lon": p["lon"], "distance_nm": p["distance_nm"], "error": True}
+
+    results = await asyncio.gather(*(fetch_one(p) for p in points))
+    return {"axis_bearing_deg": STRAIT_AXIS_BEARING_DEG, "points": results}
+
+
+# ---------------------------------------------------------------------------
+# Storm archive: screenshots (generated offline from the 2020-present NDBC
+# archive, see static/storm_archive/storms.json) of the biggest distinct
+# swell events actually recorded at the local buoy (Angeles Point/46267),
+# each showing the local wave height building through the event alongside
+# the upwind Neah Bay wave height/wind that produced it - concrete visual
+# reference for "here's what a real 10ft+ day here has actually looked
+# like on the buoys" alongside the live map.
+# ---------------------------------------------------------------------------
+@app.get("/api/storm-archive")
+def storm_archive():
+    path = os.path.join(os.path.dirname(__file__), "static", "storm_archive", "storms.json")
+    if not os.path.isfile(path):
+        return {"storms": []}
+    with open(path, encoding="utf-8") as f:
+        storms = json.load(f)
+    for s in storms:
+        s["image_url"] = f"/storm_archive/{s['image']}"
+    return {"storms": storms}
 
 
 @app.get("/api/spots")
