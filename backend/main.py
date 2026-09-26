@@ -29,7 +29,7 @@ from noaa_client import (
 )
 from scoring import (
     score_hour, score_hour_fetch_wind, label_for_score, build_historical_fetch_profile,
-    score_live_wave_observation, build_current_conditions,
+    score_live_wave_observation, build_current_conditions, SWELL_PROPAGATION_LAG_HOURS,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -131,7 +131,12 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
         # Strait/fetch-limited spot: score local wind, using the upwind
         # reference point's wind over the preceding few hours as a
         # leading indicator of fetch building down-strait, plus real
-        # buoy history as a calibration check on the forecast wind speed.
+        # buoy history as a calibration check on the forecast wind speed,
+        # plus the upwind SWELL forecast (run through the same
+        # strike-signal formula validated in Current Conditions) lagged
+        # by the empirically-measured propagation delay - this is what
+        # aligns the Forecast section with today's live-buoy work instead
+        # of scoring local wind-fetch alone.
         upwind_forecast = None
         if spot.upwind_lat is not None and spot.upwind_lon is not None:
             try:
@@ -146,8 +151,14 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
         for i, h in enumerate(forecast["hours"]):
             # Look back a few hours at the upwind point for sustained fetch.
             window = upwind_hours[max(0, i - 6):i + 1] if upwind_hours else []
+            # The swell that left Neah Bay SWELL_PROPAGATION_LAG_HOURS ago
+            # is what's arriving here now (both forecasts are hourly and
+            # share the same start time, so this is a simple index offset).
+            lag_idx = i - SWELL_PROPAGATION_LAG_HOURS
+            upwind_swell_hour = upwind_hours[lag_idx] if upwind_hours and lag_idx >= 0 else None
             scored_hours.append(score_hour_fetch_wind(
                 spot, h, upwind_hours=window, historical_profile=historical_profile,
+                upwind_swell_hour=upwind_swell_hour,
             ))
     else:
         scored_hours = [score_hour(spot, h) for h in forecast["hours"]]

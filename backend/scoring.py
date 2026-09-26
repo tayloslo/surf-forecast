@@ -101,7 +101,7 @@ def _historical_lookup(profile: dict | None, wind_speed_mph: float) -> dict | No
 
 def score_hour_fetch_wind(
     spot: Spot, hour: dict, upwind_hours: list[dict] | None = None,
-    historical_profile: dict | None = None,
+    historical_profile: dict | None = None, upwind_swell_hour: dict | None = None,
 ) -> dict:
     """Score one hourly forecast entry for a fetch-limited strait spot.
 
@@ -116,6 +116,15 @@ def score_hour_fetch_wind(
     aligned wind speed has ACTUALLY produced there before, so a forecast
     hour is graded against real analog conditions, not just a hand-tuned
     curve.
+    `upwind_swell_hour` is the Neah Bay forecast hour from
+    SWELL_PROPAGATION_LAG_HOURS earlier - i.e. what the swell forecast
+    model predicted at the strait's mouth around the time whatever's
+    arriving here now would have left. Running that through the SAME
+    validated strike-signal formula used in Current Conditions
+    (compute_strike_signal / forecast_strike_signal) lets the forecast
+    align with today's live-buoy work instead of relying purely on
+    local wind-fetch, which misses real swell events the wind-only model
+    can't see coming.
     """
     wind_speed = hour["wind_speed_mph"] or 0.0
     wind_dir = hour["wind_dir_deg"]
@@ -181,7 +190,26 @@ def score_hour_fetch_wind(
         elif hist_wave_height_ft < 0.7:
             historical_factor = 0.85
 
-    composite = (dir_fitness ** 1.2) * speed_fitness * fetch_bonus * historical_factor
+    # --- Swell strike-signal projection: run the upwind Neah Bay swell
+    # forecast (lagged by the validated ~3h propagation delay) through
+    # the same strike-signal formula validated against live buoy history
+    # in Current Conditions. A predicted strike nudges the score up (real
+    # swell is arriving on top of/regardless of local wind); a
+    # predicted signal well below threshold nudges it down slightly,
+    # since local wind alone rarely holds up a good wave here without it.
+    swell_bonus = 1.0
+    predicted_signal = None
+    predicted_is_strike = None
+    fs = forecast_strike_signal(upwind_swell_hour)
+    if fs:
+        predicted_signal = fs["signal"]
+        predicted_is_strike = fs["is_strike"]
+        if predicted_is_strike:
+            swell_bonus = min(1.3, 1.15 + (predicted_signal - STRIKE_THRESHOLD) / 40)
+        elif predicted_signal < STRIKE_THRESHOLD * 0.5:
+            swell_bonus = 0.85
+
+    composite = (dir_fitness ** 1.2) * speed_fitness * fetch_bonus * historical_factor * swell_bonus
     score_10 = round(max(0.0, min(1.0, composite)) * 10, 1)
 
     return {
@@ -194,9 +222,12 @@ def score_hour_fetch_wind(
             "speed_fitness": round(speed_fitness, 2),
             "fetch_bonus": round(fetch_bonus, 2),
             "historical_factor": round(historical_factor, 2),
+            "swell_bonus": round(swell_bonus, 2),
         },
         "historical_wave_height_ft": hist_wave_height_ft,
         "historical_analog_count": hist_analog_count,
+        "predicted_strike_signal": predicted_signal,
+        "predicted_strike": predicted_is_strike,
         "model": "fetch_wind",
     }
 
@@ -395,6 +426,21 @@ STRAIT_AXIS_BEARING_DEG = 292.8
 STRIKE_THRESHOLD = 10.0
 STRIKE_HIT_RATE_PCT = 44  # historical P(4ft+ at Angeles Pt | signal >= threshold)
 SWELL_DIR_MATCH_TOLERANCE_DEG = 30  # how close two buoys' swell directions must be to call it "the same train"
+SWELL_PROPAGATION_LAG_HOURS = 3  # validated cross-correlation lag, Neah Bay -> Angeles Pt (~16.3kn group velocity for ~10.7s swell)
+
+
+def _strike_signal_value(height_ft: float | None, period_s: float | None, direction_deg: float | None) -> tuple[float, float] | None:
+    """Core strike-signal math, shared by the live (compute_strike_signal)
+    and forecast (forecast_strike_signal) paths: signal = height *
+    cos(angle off the strait axis)^2 * period bonus. Returns
+    (signal, angle_offset_deg) or None if there isn't enough data to
+    compute it."""
+    if height_ft is None or direction_deg is None:
+        return None
+    angle_offset = _angle_diff(direction_deg, STRAIT_AXIS_BEARING_DEG)
+    period_bonus = 1.3 if (period_s is not None and period_s < 10) else 1.0
+    signal = round(height_ft * (math.cos(math.radians(angle_offset)) ** 2) * period_bonus, 2)
+    return signal, round(angle_offset, 1)
 
 
 def compute_strike_signal(neah_bay_spec: dict | None) -> dict | None:
@@ -409,13 +455,10 @@ def compute_strike_signal(neah_bay_spec: dict | None) -> dict | None:
     height_ft = neah_bay_spec.get("swell_height_ft")
     period_s = neah_bay_spec.get("swell_period_s")
     wave_dir = neah_bay_spec.get("swell_dir_deg")
-    if height_ft is None or wave_dir is None:
+    result = _strike_signal_value(height_ft, period_s, wave_dir)
+    if result is None:
         return None
-
-    angle_offset = _angle_diff(wave_dir, STRAIT_AXIS_BEARING_DEG)
-    period_bonus = 1.3 if (period_s is not None and period_s < 10) else 1.0
-    signal = height_ft * (math.cos(math.radians(angle_offset)) ** 2) * period_bonus
-    signal = round(signal, 2)
+    signal, angle_offset = result
     is_strike = signal >= STRIKE_THRESHOLD
 
     return {
@@ -430,11 +473,39 @@ def compute_strike_signal(neah_bay_spec: dict | None) -> dict | None:
         "neah_bay_swell_height_ft": height_ft,
         "neah_bay_swell_period_s": period_s,
         "neah_bay_swell_dir_deg": wave_dir,
-        "angle_offset_from_axis_deg": round(angle_offset, 1),
+        "angle_offset_from_axis_deg": angle_offset,
         "strait_axis_bearing_deg": STRAIT_AXIS_BEARING_DEG,
-        "period_bonus_applied": period_bonus > 1.0,
+        "period_bonus_applied": period_s is not None and period_s < 10,
         "observed_at": neah_bay_spec.get("observed_at"),
         "source": "live_buoy_46087_swell_partition",
+    }
+
+
+def forecast_strike_signal(upwind_hour: dict | None) -> dict | None:
+    """Same strike-signal math as compute_strike_signal, applied to a
+    forecast hour's swell fields (Open-Meteo marine forecast at Neah
+    Bay: swell_height_ft/swell_period_s/swell_dir_deg) instead of a live
+    buoy reading. This is what lets the Forecast section use the same
+    validated physics as Current Conditions - projecting the
+    strike-signal forward using the forecast model's own swell numbers -
+    instead of only scoring local wind-fetch as before."""
+    if not upwind_hour:
+        return None
+    height_ft = upwind_hour.get("swell_height_ft")
+    period_s = upwind_hour.get("swell_period_s")
+    wave_dir = upwind_hour.get("swell_dir_deg")
+    result = _strike_signal_value(height_ft, period_s, wave_dir)
+    if result is None:
+        return None
+    signal, angle_offset = result
+    return {
+        "signal": signal,
+        "is_strike": signal >= STRIKE_THRESHOLD,
+        "neah_bay_swell_height_ft": height_ft,
+        "neah_bay_swell_period_s": period_s,
+        "neah_bay_swell_dir_deg": wave_dir,
+        "angle_offset_from_axis_deg": angle_offset,
+        "time": upwind_hour.get("time"),
     }
 
 

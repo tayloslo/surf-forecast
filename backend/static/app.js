@@ -166,7 +166,7 @@ async function openDetail(spotId) {
   // buoy-relationship analysis, projecting the next several days.
   // ---------------------------------------------------------------
   html += `<div class="section-heading">Forecast</div>
-    <div class="section-sub">Modeled from local wind + upwind fetch + historical buoy analogs</div>`;
+    <div class="section-sub">Local wind-fetch + upwind swell strike-signal (lagged ~3h) + historical buoy analogs</div>`;
 
   if (spot.historical_profile_summary) {
     const hp = spot.historical_profile_summary;
@@ -193,6 +193,11 @@ async function openDetail(spotId) {
           detail = `wind ${h.wind_speed_mph?.toFixed(0) ?? "?"}mph @ ${h.wind_dir_deg?.toFixed(0) ?? "?"}\u00b0 (fetch-driven wave)`;
           if (h.historical_wave_height_ft != null) {
             detail += ` &middot; similar past wind produced ~${h.historical_wave_height_ft.toFixed(1)}ft (${h.historical_analog_count} analogs)`;
+          }
+          if (h.predicted_strike_signal != null) {
+            detail += h.predicted_strike ?
+              ` &middot; <strong>swell strike signal ${h.predicted_strike_signal}</strong> (upwind swell projected to arrive)` :
+              ` &middot; swell signal ${h.predicted_strike_signal} (below strike threshold)`;
           }
         } else {
           detail = `${h.swell_height_ft?.toFixed(1) ?? "?"}ft @ ${h.swell_period_s?.toFixed(0) ?? "?"}s, wind ${h.wind_speed_mph?.toFixed(0) ?? "?"}mph`;
