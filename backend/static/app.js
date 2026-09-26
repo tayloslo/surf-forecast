@@ -86,18 +86,114 @@ function destinationPoint(lat, lon, bearingDeg, distanceNm) {
   return [(lat2 * 180) / Math.PI, (lon2 * 180) / Math.PI];
 }
 
+// Great-circle path between two points, densified into small steps so
+// Leaflet's straight-line rendering (which is planar, not geodesic)
+// actually tracks the curve instead of visibly cutting corners over
+// these ~100-200nm spans - matters here because a naive 2-point chord
+// from the strait mouth out to a far offshore point bows noticeably
+// off the true bearing on a map this size.
+function greatCirclePath(start, end, steps = 20) {
+  const lat1 = (start[0] * Math.PI) / 180, lon1 = (start[1] * Math.PI) / 180;
+  const lat2 = (end[0] * Math.PI) / 180, lon2 = (end[1] * Math.PI) / 180;
+  const d = 2 * Math.asin(Math.sqrt(
+    Math.sin((lat2 - lat1) / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin((lon2 - lon1) / 2) ** 2,
+  ));
+  if (d === 0) return [start, end];
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const f = i / steps;
+    const a = Math.sin((1 - f) * d) / Math.sin(d);
+    const b = Math.sin(f * d) / Math.sin(d);
+    const x = a * Math.cos(lat1) * Math.cos(lon1) + b * Math.cos(lat2) * Math.cos(lon2);
+    const y = a * Math.cos(lat1) * Math.sin(lon1) + b * Math.cos(lat2) * Math.sin(lon2);
+    const z = a * Math.sin(lat1) + b * Math.sin(lat2);
+    const lat = Math.atan2(z, Math.sqrt(x * x + y * y));
+    const lon = Math.atan2(y, x);
+    pts.push([(lat * 180) / Math.PI, (lon * 180) / Math.PI]);
+  }
+  return pts;
+}
+
+// Vancouver Island's outer (west) coastline - the swell window wedge below
+// spans bearings that sweep across the island (Carmanah Point through Cape
+// Scott all fall inside the +/-45deg cone), and a pure geometric wedge with
+// no land-awareness drew its fill straight across the island. Clip each
+// wedge spoke against this coastline (a simple lat/lon polyline, not a
+// bearing-indexed table - the coast doesn't move monotonically in bearing
+// from the strait mouth, so a bearing lookup can't represent it) using a
+// local planar ray-vs-segment intersection, which is accurate enough at
+// this scale for a visual guard rail.
+const VI_COASTLINE_LATLON = [
+  [48.555, -124.420], // Port Renfrew area
+  [48.615, -124.750], // Carmanah Point
+  [48.720, -125.100], // Pachena Point
+  [48.830, -125.350], // Bamfield / Barkley Sound entrance
+  [48.920, -125.540], // Amphitrite Point / Ucluelet
+  [49.130, -125.900], // Tofino / Long Beach
+  [49.380, -126.540], // Estevan Point
+  [49.580, -126.820], // Nootka Island
+  [50.030, -127.360], // Kyuquot
+  [50.130, -127.900], // Brooks Peninsula
+  [50.770, -128.430], // Cape Scott
+  [51.300, -127.800], // north of Cape Scott, tail point so the last real
+                       // segment isn't an open ray past the true coast
+];
+const VI_COAST_SAFETY_MARGIN_NM = 6;
+
+function _toLocalXyNm(lat, lon) {
+  // Local equirectangular projection centered on the strait mouth, in
+  // nautical miles - fine for intersection tests over a ~200nm span.
+  const coslat0 = Math.cos((STRAIT_MOUTH[0] * Math.PI) / 180);
+  const x = (lon - STRAIT_MOUTH[1]) * 60 * coslat0;
+  const y = (lat - STRAIT_MOUTH[0]) * 60;
+  return [x, y];
+}
+
+function maxOpenWaterDistanceNm(bearingDeg) {
+  // Cast a ray from the strait mouth along bearingDeg and find the
+  // nearest point where it crosses the Vancouver Island coastline
+  // polyline; return that distance (minus a safety margin) so the
+  // wedge never fills over land, or Infinity if the ray misses the
+  // coastline entirely (e.g. bearings well south of the island).
+  const brng = (bearingDeg * Math.PI) / 180;
+  const dx = Math.sin(brng), dy = Math.cos(brng); // ray direction, north=+y/east=+x
+  let nearestNm = Infinity;
+  for (let i = 0; i < VI_COASTLINE_LATLON.length - 1; i++) {
+    const [x1, y1] = _toLocalXyNm(...VI_COASTLINE_LATLON[i]);
+    const [x2, y2] = _toLocalXyNm(...VI_COASTLINE_LATLON[i + 1]);
+    const ex = x2 - x1, ey = y2 - y1;
+    const denom = dx * ey - dy * ex;
+    if (Math.abs(denom) < 1e-9) continue; // parallel
+    const t = (x1 * ey - y1 * ex) / denom; // distance along ray (nm), since |dx,dy|=1
+    const u = (x1 * dy - y1 * dx) / (-denom); // fraction along the coast segment
+    if (t > 0 && u >= 0 && u <= 1 && t < nearestNm) {
+      nearestNm = t;
+    }
+  }
+  if (!Number.isFinite(nearestNm)) return Infinity;
+  return Math.max(0, nearestNm - VI_COAST_SAFETY_MARGIN_NM);
+}
+
 function drawSwellWindow() {
   // A wedge/cone of points from the strait mouth out into the Pacific,
   // spanning the swell window's angular width, so the map shows the
   // actual geographic "window" a storm's swell needs to sit inside -
-  // not just a single upwind reference dot.
-  const points = [STRAIT_MOUTH];
+  // not just a single upwind reference dot. Each spoke is clipped short
+  // of Vancouver Island's coastline (see maxOpenWaterDistanceNm) and
+  // drawn as a great-circle arc rather than a straight chord.
   const steps = 24;
+  const spokeEnds = [];
   for (let i = 0; i <= steps; i++) {
     const bearing = STRAIT_AXIS_BEARING_DEG - SWELL_WINDOW_HALF_ANGLE_DEG + (2 * SWELL_WINDOW_HALF_ANGLE_DEG * i) / steps;
-    points.push(destinationPoint(STRAIT_MOUTH[0], STRAIT_MOUTH[1], bearing, SWELL_WINDOW_RADIUS_NM));
+    const radius = Math.min(SWELL_WINDOW_RADIUS_NM, maxOpenWaterDistanceNm(bearing));
+    spokeEnds.push(destinationPoint(STRAIT_MOUTH[0], STRAIT_MOUTH[1], bearing, radius));
   }
-  points.push(STRAIT_MOUTH);
+
+  const points = [STRAIT_MOUTH];
+  for (let i = 0; i < spokeEnds.length - 1; i++) {
+    points.push(...greatCirclePath(spokeEnds[i], spokeEnds[i + 1], 4));
+  }
+  points.push(spokeEnds[spokeEnds.length - 1], STRAIT_MOUTH);
 
   L.polygon(points, {
     color: "#4fa8d8",
@@ -107,13 +203,15 @@ function drawSwellWindow() {
     dashArray: "4,5",
   }).addTo(map).bindTooltip(
     "Swell window: the wedge of open Pacific a storm needs to sit in for its swell to funnel down the Strait of Juan de Fuca toward Elwha (±" +
-    SWELL_WINDOW_HALF_ANGLE_DEG + "° off the " + STRAIT_AXIS_BEARING_DEG + "° strait axis).",
+    SWELL_WINDOW_HALF_ANGLE_DEG + "° off the " + STRAIT_AXIS_BEARING_DEG + "° strait axis, clipped short of Vancouver Island's coast).",
     { sticky: true }
   );
 
-  // Axis centerline, for a quick visual read on "dead-on" vs "off-axis".
-  const axisEnd = destinationPoint(STRAIT_MOUTH[0], STRAIT_MOUTH[1], STRAIT_AXIS_BEARING_DEG, SWELL_WINDOW_RADIUS_NM);
-  L.polyline([STRAIT_MOUTH, axisEnd], { color: "#4fa8d8", weight: 1, dashArray: "2,6", opacity: 0.6 }).addTo(map);
+  // Axis centerline, for a quick visual read on "dead-on" vs "off-axis" -
+  // a true great-circle arc, clipped the same way as the wedge spokes.
+  const axisRadius = Math.min(SWELL_WINDOW_RADIUS_NM, maxOpenWaterDistanceNm(STRAIT_AXIS_BEARING_DEG));
+  const axisEnd = destinationPoint(STRAIT_MOUTH[0], STRAIT_MOUTH[1], STRAIT_AXIS_BEARING_DEG, axisRadius);
+  L.polyline(greatCirclePath(STRAIT_MOUTH, axisEnd), { color: "#4fa8d8", weight: 1, dashArray: "2,6", opacity: 0.6 }).addTo(map);
 }
 
 // ---------------------------------------------------------------------------
