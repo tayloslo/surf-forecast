@@ -20,13 +20,17 @@ import logging
 import os
 import time
 import asyncio
+from datetime import datetime
 
 from spots_data import SPOTS, SPOTS_BY_ID
 from noaa_client import (
     fetch_marine_forecast, find_working_nearest_buoy, fetch_buoy_observation,
     fetch_tides_currents_wind, fetch_historical_observations,
 )
-from scoring import score_hour, score_hour_fetch_wind, label_for_score, build_historical_fetch_profile
+from scoring import (
+    score_hour, score_hour_fetch_wind, label_for_score, build_historical_fetch_profile,
+    score_live_wave_observation,
+)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("surf-api")
@@ -160,10 +164,29 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
 
 
 def _current_hour_score(scored: dict) -> dict | None:
-    """Pick the scored hour closest to right now for the map dot color."""
-    if not scored["hours"]:
+    """Pick the scored hour closest to right now for the map dot color.
+    Forecast hours start at midnight of the request day (Open-Meteo always
+    returns a full day from 00:00), so index 0 is NOT "now" - picking it
+    unconditionally showed stale/wrong-time-of-day conditions (e.g. calm
+    overnight wind) as the current score any time this was checked later
+    in the day. Match on the hour whose local timestamp is closest to
+    the current wall-clock time instead."""
+    hours = scored["hours"]
+    if not hours:
         return None
-    return scored["hours"][0]
+    now = datetime.now()
+    best = hours[0]
+    best_diff = None
+    for h in hours:
+        try:
+            h_time = datetime.fromisoformat(h["time"])
+        except (ValueError, TypeError):
+            continue
+        diff = abs((h_time - now).total_seconds())
+        if best_diff is None or diff < best_diff:
+            best_diff = diff
+            best = h
+    return best
 
 
 @app.get("/api/health")
@@ -179,14 +202,35 @@ async def list_spots():
         try:
             scored = await _get_scored_forecast(spot)
             cur = _current_hour_score(scored)
+            score = cur["score"] if cur else None
+            label = cur["label"] if cur else "Unknown"
+
+            # For "right now" specifically, prefer a live nearby wave buoy
+            # reading over the modeled forecast score when one is
+            # available - real ground truth beats a model guess for the
+            # current instant, and the forecast-only path was showing
+            # stale/wrong conditions (e.g. calm overnight wind carried
+            # forward) while a real buoy a couple km away was reporting
+            # an actual multi-foot wave.
+            local_wave_id = getattr(spot, "local_wave_buoy_id", None)
+            if local_wave_id:
+                try:
+                    obs = await fetch_buoy_observation(local_wave_id)
+                    live = score_live_wave_observation(spot, obs) if obs else None
+                    if live:
+                        score = live["score"]
+                        label = label_for_score(score)
+                except Exception:
+                    log.exception("live wave scoring failed for spot %s", spot.id)
+
             return {
                 "id": spot.id,
                 "name": spot.name,
                 "lat": spot.lat,
                 "lon": spot.lon,
                 "source": spot.source,
-                "current_score": cur["score"] if cur else None,
-                "current_label": cur["label"] if cur else "Unknown",
+                "current_score": score,
+                "current_label": label,
             }
         except Exception:
             log.exception("failed to score spot %s", spot.id)
@@ -259,6 +303,14 @@ async def spot_detail(spot_id: int):
             local_wave_obs = await fetch_buoy_observation(local_wave_id)
             if local_wave_obs:
                 result["local_wave_observation"] = local_wave_obs
+                # This is real ground truth for "right now" - surface it as
+                # its own scored field distinct from the modeled forecast,
+                # so the detail view can show/prefer it as the current
+                # condition rather than only the hourly model guess.
+                live = score_live_wave_observation(spot, local_wave_obs)
+                if live:
+                    live["label"] = label_for_score(live["score"])
+                    result["current_live_observation"] = live
         except Exception:
             log.exception("local wave buoy fetch failed for spot %s", spot_id)
 

@@ -296,3 +296,55 @@ def label_for_score(score: float) -> str:
     if score >= 2:
         return "Poor"
     return "Flat"
+
+
+def score_live_wave_observation(spot: Spot, obs: dict) -> dict | None:
+    """Score "right now" directly from a live nearby wave buoy reading,
+    when one exists (local_wave_buoy_id), rather than only from the
+    forecast model. This matters because the forecast-model score for
+    "now" is picked by nearest-timestamp match against an hourly model
+    forecast - useful for future hours, but for the CURRENT hour a real
+    buoy 2-10km away reporting an actual wave height/period is strictly
+    better ground truth than a modeled wind guess, and should be trusted
+    over it when both exist. Reuses the same period/height triangular
+    fitness curves as the open-coast swell model, since a real wave
+    height/period reading is graded the same way regardless of what
+    mechanism produced it."""
+    wave_ft = obs.get("wave_height_ft")
+    if wave_ft is None:
+        return None
+    period_s = obs.get("dominant_period_s")
+    wave_dir = obs.get("wave_dir_deg")
+
+    height_fitness = _triangular_fitness(
+        wave_ft, spot.min_good_height_ft, spot.ideal_height_ft, spot.max_good_height_ft
+    )
+    if period_s is not None:
+        period_fitness = _triangular_fitness(
+            period_s, spot.min_good_period_s, spot.ideal_period_s, spot.ideal_period_s + 8
+        )
+    else:
+        period_fitness = 0.7  # unknown, don't penalize/reward
+
+    if wave_dir is not None:
+        off_angle = _angle_diff(wave_dir, spot.facing_direction)
+        dir_fitness = max(0.0, 1.0 - (off_angle / spot.swell_window_deg))
+    else:
+        dir_fitness = 0.7
+
+    composite = (0.5 + 0.5 * dir_fitness) * (0.4 + 0.6 * period_fitness) * (0.3 + 0.7 * height_fitness)
+    score_10 = round(max(0.0, min(1.0, composite)) * 10, 1)
+
+    return {
+        "score": score_10,
+        "wave_height_ft": wave_ft,
+        "dominant_period_s": period_s,
+        "wave_dir_deg": wave_dir,
+        "observed_at": obs.get("observed_at"),
+        "components": {
+            "height_fitness": round(height_fitness, 2),
+            "period_fitness": round(period_fitness, 2),
+            "direction_fitness": round(dir_fitness, 2),
+        },
+        "source": "live_buoy",
+    }

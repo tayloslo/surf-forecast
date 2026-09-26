@@ -1,41 +1,5 @@
 [
   {
-    "name": "Westport (South Jetty)",
-    "lat": 46.8938,
-    "lon": -124.1187,
-    "facing_direction": 250,
-    "swell_window_deg": 65,
-    "nearest_buoy_id": "46029",
-    "source": "curated"
-  },
-  {
-    "name": "La Push (First Beach)",
-    "lat": 47.9084,
-    "lon": -124.6377,
-    "facing_direction": 250,
-    "swell_window_deg": 60,
-    "nearest_buoy_id": "46041",
-    "source": "curated"
-  },
-  {
-    "name": "Third Beach, Olympic NP",
-    "lat": 47.8797,
-    "lon": -124.6297,
-    "facing_direction": 250,
-    "swell_window_deg": 55,
-    "nearest_buoy_id": "46041",
-    "source": "curated"
-  },
-  {
-    "name": "Ocean Shores",
-    "lat": 46.9707,
-    "lon": -124.1637,
-    "facing_direction": 250,
-    "swell_window_deg": 70,
-    "nearest_buoy_id": "46029",
-    "source": "curated"
-  },
-  {
     "name": "Elwha, WA",
     "lat": 48.1494,
     "lon": -123.566,
@@ -49,39 +13,6 @@
     "local_wave_buoy_id": "46267",
     "fetch_min_wind_mph": 12.4,
     "fetch_ideal_wind_mph": 21.7,
-    "fetch_max_wind_mph": 34.2,
-    "source": "curated"
-  },
-  {
-    "name": "Freshwater Bay, WA",
-    "lat": 48.165,
-    "lon": -123.7027,
-    "facing_direction": 280,
-    "swell_window_deg": 50,
-    "scoring_model": "fetch_wind",
-    "upwind_lat": 48.493,
-    "upwind_lon": -124.727,
-    "nearest_buoy_id": "46087",
-    "secondary_buoy_id": "9444090",
-    "local_wave_buoy_id": "46267",
-    "fetch_min_wind_mph": 11.2,
-    "fetch_ideal_wind_mph": 19.9,
-    "fetch_max_wind_mph": 31.1,
-    "source": "curated"
-  },
-  {
-    "name": "Point Wilson, Port Townsend",
-    "lat": 48.1447,
-    "lon": -122.7597,
-    "facing_direction": 300,
-    "swell_window_deg": 50,
-    "scoring_model": "fetch_wind",
-    "upwind_lat": 48.493,
-    "upwind_lon": -124.727,
-    "nearest_buoy_id": "46088",
-    "secondary_buoy_id": "9444090",
-    "fetch_min_wind_mph": 13.7,
-    "fetch_ideal_wind_mph": 23.6,
     "fetch_max_wind_mph": 34.2,
     "source": "curated"
   }

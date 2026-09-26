@@ -23,6 +23,27 @@ All height/speed preference fields are US units (feet, mph).
 import json
 
 SPOTS = [
+    {
+        "name": "Elwha, WA", "lat": 48.1494, "lon": -123.5660,
+        "facing_direction": 270, "swell_window_deg": 45,
+        "scoring_model": "fetch_wind",
+        "upwind_lat": 48.493, "upwind_lon": -124.727,
+        "nearest_buoy_id": "46087",
+        "secondary_buoy_id": "9444090",
+        # Local wave reading = NDBC buoy 46267, Angeles Point, only ~5km
+        # from the spot. No wind sensor onboard, so it can't replace 46087
+        # for wind+wave calibration, but its live wave height/period is
+        # the closest real wave observation to Elwha available.
+        "local_wave_buoy_id": "46267",
+        "fetch_min_wind_mph": 12.4, "fetch_ideal_wind_mph": 21.7, "fetch_max_wind_mph": 34.2,
+    },
+]
+
+# Paused spots - removed from the live SPOTS list per user request but kept
+# here intact (with all their original provenance comments) so they can be
+# restored by moving entries back into SPOTS above, rather than re-researched
+# from scratch. Not loaded by seed_spots.json while paused.
+PAUSED_SPOTS = [
     # --- Open-coast groundswell breaks (real swell, same physics as any
     # Pacific beach break; these DO show up on commercial forecast sites) ---
     {
@@ -65,20 +86,6 @@ SPOTS = [
     # against real analog conditions (see build_historical_fetch_profile).
     # Local ground truth = NOAA tide station 9444090, Port Angeles, about
     # 9km from the spot (no NDBC wave buoy sits right at Elwha itself).
-    {
-        "name": "Elwha, WA", "lat": 48.1494, "lon": -123.5660,
-        "facing_direction": 270, "swell_window_deg": 45,
-        "scoring_model": "fetch_wind",
-        "upwind_lat": 48.493, "upwind_lon": -124.727,
-        "nearest_buoy_id": "46087",
-        "secondary_buoy_id": "9444090",
-        # Local wave reading = NDBC buoy 46267, Angeles Point, only ~5km
-        # from the spot. No wind sensor onboard, so it can't replace 46087
-        # for wind+wave calibration, but its live wave height/period is
-        # the closest real wave observation to Elwha available.
-        "local_wave_buoy_id": "46267",
-        "fetch_min_wind_mph": 12.4, "fetch_ideal_wind_mph": 21.7, "fetch_max_wind_mph": 34.2,
-    },
     # Freshwater Bay, WA - similar mechanism to Elwha, a west-facing
     # cove a bit further up-strait (closer to Port Angeles/Neah Bay).
     # Slightly more exposed to west fetch than Elwha given its position.
