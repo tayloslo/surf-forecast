@@ -392,7 +392,15 @@ if os.path.isdir(_STATIC_DIR):
 
     @app.get("/{full_path:path}")
     def serve_frontend(full_path: str):
+        # Force revalidation on every load instead of letting the browser
+        # assume a cached copy of app.js/style.css/index.html is still
+        # fresh - this app has shipped several fixes in quick succession
+        # and a stale cached JS bundle silently serving old UI/logic
+        # (with no visible error) is a much worse failure mode than the
+        # extra conditional-GET round trip costs. ETag still makes this
+        # a cheap 304 when nothing has actually changed.
+        headers = {"Cache-Control": "no-cache"}
         candidate = os.path.join(_STATIC_DIR, full_path)
         if full_path and os.path.isfile(candidate):
-            return FileResponse(candidate)
-        return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
+            return FileResponse(candidate, headers=headers)
+        return FileResponse(os.path.join(_STATIC_DIR, "index.html"), headers=headers)
