@@ -32,6 +32,7 @@ from scoring import (
     score_hour, score_hour_fetch_wind, label_for_score, build_historical_fetch_profile,
     score_live_wave_observation, build_current_conditions, SWELL_PROPAGATION_LAG_HOURS,
     scale_description_for_spot, quality_factors_for_spot, build_local_swell_benchmark,
+    build_storm_signature, score_wind_direction_vs_storm_signature,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -64,6 +65,13 @@ _HIST_CACHE_TTL_S = 24 * 60 * 60  # 24 hours (fetch now spans 2020-present multi
 # calibration above.
 _LOCAL_BENCHMARK_CACHE: dict[str, dict] = {}
 _LOCAL_BENCHMARK_CACHE_TTL_S = 24 * 60 * 60  # 24 hours (same multi-year archive cost as _HIST_CACHE)
+
+# Same idea again, but for the empirical storm signature (see
+# build_storm_signature) - what upwind wind direction/speed has
+# actually preceded a 6ft+ local swell event, historically. Keyed by
+# the (upwind, local) buoy pair since it needs both.
+_STORM_SIG_CACHE: dict[tuple, dict] = {}
+_STORM_SIG_CACHE_TTL_S = 24 * 60 * 60  # 24 hours, same reasoning as the other historical caches
 
 # Open-Meteo free tier rate-limits concurrent requests (429s if we fire
 # ~20 at once, as happens on first map load with an empty cache). Cap
@@ -154,6 +162,34 @@ async def _get_local_swell_benchmark(spot) -> dict | None:
     _LOCAL_BENCHMARK_CACHE[buoy_id] = {"fetched_at": now, "data": benchmark}
     return benchmark
 
+async def _get_storm_signature(spot) -> dict | None:
+    """Build (or return cached) the empirical storm signature (see
+    build_storm_signature) for a fetch_wind spot that has both an
+    upwind reference buoy and a local wave buoy configured - the
+    concrete "what has a 6ft+ day here actually looked like" answer,
+    used both to explain the pattern in the UI and to score live wind
+    direction against a real historical target rather than a
+    hand-tuned angle."""
+    upwind_id = spot.nearest_buoy_id
+    local_id = getattr(spot, "local_wave_buoy_id", None)
+    if not upwind_id or not local_id:
+        return None
+    key = (upwind_id, local_id)
+    cached = _STORM_SIG_CACHE.get(key)
+    now = time.time()
+    if cached and (now - cached["fetched_at"]) < _STORM_SIG_CACHE_TTL_S:
+        return cached["data"]
+    try:
+        local_rows = await fetch_historical_wave_observations(local_id)
+        upwind_rows = await fetch_historical_observations(upwind_id)
+        signature = build_storm_signature(local_rows, upwind_rows)
+    except Exception:
+        log.exception("storm signature build failed for buoys %s/%s", upwind_id, local_id)
+        return None
+    _STORM_SIG_CACHE[key] = {"fetched_at": now, "data": signature}
+    return signature
+
+
 
 async def _get_scored_forecast(spot, days: int = 7) -> dict:
     cached = _CACHE.get(spot.id)
@@ -181,6 +217,7 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
                 log.exception("upwind forecast fetch failed for spot %s", spot.id)
 
         historical_profile = await _get_historical_profile(spot)
+        storm_signature = await _get_storm_signature(spot)
 
         upwind_hours = upwind_forecast["hours"] if upwind_forecast else []
         scored_hours = []
@@ -192,9 +229,14 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
             # share the same start time, so this is a simple index offset).
             lag_idx = i - SWELL_PROPAGATION_LAG_HOURS
             upwind_swell_hour = upwind_hours[lag_idx] if upwind_hours and lag_idx >= 0 else None
+            # Upwind wind direction ~6h ahead of this hour's local arrival
+            # (same lag the storm signature was built on) - used to grade
+            # against the empirical storm-direction signature.
+            storm_upwind_hour = upwind_hours[i] if upwind_hours and i < len(upwind_hours) else None
             scored_hours.append(score_hour_fetch_wind(
                 spot, h, upwind_hours=window, historical_profile=historical_profile,
-                upwind_swell_hour=upwind_swell_hour,
+                upwind_swell_hour=upwind_swell_hour, storm_signature=storm_signature,
+                storm_upwind_hour=storm_upwind_hour,
             ))
     else:
         scored_hours = [score_hour(spot, h) for h in forecast["hours"]]
@@ -402,10 +444,20 @@ async def spot_detail(spot_id: int):
     # independent local wind-chop) - this is the "what in the live
     # readings will actually make a good wave at Elwha right now" answer,
     # distinct from the hourly forecast model below.
+    storm_signature = None
+    if getattr(spot, "scoring_model", "swell") == "fetch_wind":
+        try:
+            storm_signature = await _get_storm_signature(spot)
+            if storm_signature:
+                result["storm_signature"] = storm_signature
+        except Exception:
+            log.exception("storm signature fetch failed for spot %s", spot_id)
+
     if neah_bay_obs or local_wave_obs:
         try:
             current_conditions = build_current_conditions(
                 spot, neah_bay_obs, local_wave_obs, neah_bay_spec, local_wave_spec,
+                storm_signature=storm_signature,
             )
             if current_conditions:
                 result["current_conditions"] = current_conditions

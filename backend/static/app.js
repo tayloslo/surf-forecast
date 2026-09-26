@@ -177,6 +177,19 @@ async function openDetail(spotId) {
           line up on top of size.
         </div>`;
       })() : ""}
+      ${spot.storm_signature ? (() => {
+        const ss = spot.storm_signature;
+        return `<div class="factor-benchmark">
+          <strong>Storm signature (${ss.event_count} distinct ${ss.big_wave_height_ft}ft+ events):</strong> ${ss.summary}
+          <div style="opacity:0.7;font-size:0.85em;margin-top:4px;">
+            Upwind wind ${ss.lookback_hours}h before peak &mdash; median ${ss.upwind_wind_dir_deg.median}&deg;
+            @ ${ss.upwind_wind_speed_mph.median}mph, most common ${ss.upwind_wind_dir_deg.dominant_bucket_low_deg}-${ss.upwind_wind_dir_deg.dominant_bucket_low_deg + 10}&deg;
+            (${ss.upwind_wind_dir_deg.dominant_bucket_pct}% of events) &middot;
+            local wave arrives from ${ss.local_peak_wave_dir_deg_median}&deg; @ ${ss.local_peak_period_s_median}s,
+            max seen ${ss.local_peak_height_ft_max}ft.
+          </div>
+        </div>`;
+      })() : ""}
     </details>`;
   }
 
@@ -199,6 +212,18 @@ async function openDetail(spotId) {
       <div>Neah Bay swell right now: ${s.neah_bay_swell_height_ft} ft @ ${s.neah_bay_swell_period_s ?? "?"}s,
         from ${s.neah_bay_swell_dir_deg}&deg; (${s.angle_offset_from_axis_deg}&deg; off the ${s.strait_axis_bearing_deg}&deg; strait axis)</div>
       <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Swell-only, separated from local wind-chop &middot; observed ${s.observed_at}</div>
+    </div>`;
+  }
+
+  if (cc && cc.storm_signature_match) {
+    const sm = cc.storm_signature_match;
+    const smCls = sm.matches_storm_pattern ? "good" : "poor";
+    html += `<div class="buoy-box">
+      <h4>Wind direction vs. storm pattern</h4>
+      <div class="strike-verdict badge-${smCls}" style="font-size:0.78rem;">${sm.matches_storm_pattern ? "Matches historical 6ft+ pattern" : "Off the historical pattern"}</div>
+      <div>Live upwind wind: ${sm.wind_dir_deg}&deg; vs. historical median ${sm.storm_signature_dir_deg}&deg;
+        (${sm.off_angle_deg}&deg; off, fitness ${sm.fitness})</div>
+      <div style="opacity:0.6;font-size:0.8em;margin-top:4px;">Based on wind direction 6h before local buoy's peak, across all past 6ft+ events</div>
     </div>`;
   }
 
@@ -297,6 +322,11 @@ async function openDetail(spotId) {
             detail += h.predicted_strike ?
               ` &middot; <strong>swell strike signal ${h.predicted_strike_signal}</strong> (upwind swell projected to arrive)` :
               ` &middot; swell signal ${h.predicted_strike_signal} (below strike threshold)`;
+          }
+          if (h.storm_signature_match != null) {
+            detail += h.storm_signature_match.matches_storm_pattern ?
+              ` &middot; wind dir matches storm pattern` :
+              ` &middot; wind dir ${h.storm_signature_match.off_angle_deg}\u00b0 off storm pattern`;
           }
         } else {
           detail = `${h.swell_height_ft?.toFixed(1) ?? "?"}ft @ ${h.swell_period_s?.toFixed(0) ?? "?"}s, wind ${h.wind_speed_mph?.toFixed(0) ?? "?"}mph`;

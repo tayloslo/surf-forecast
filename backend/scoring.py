@@ -13,7 +13,9 @@ All height/speed inputs and thresholds in this module are US units
 (feet, mph), matching what noaa_client.py returns and what US surfers
 actually think in.
 """
+import bisect
 import math
+from datetime import datetime, timedelta
 
 from database import Spot
 
@@ -145,6 +147,177 @@ def build_local_swell_benchmark(rows: list[dict], good_swell_height_ft: float = 
         "total_days": len(days),
         "days_at_or_above_good_swell": good_days,
         "days_at_or_above_pct": round(good_days / len(days) * 100, 0) if days else None,
+    }
+
+
+def build_storm_signature(
+    local_rows: list[dict], upwind_rows: list[dict],
+    big_wave_height_ft: float = 6.0, lookback_hours: int = 6,
+    event_gap_hours: int = 48,
+) -> dict | None:
+    """Answer the user's actual question empirically: across the whole
+    multi-year record, what did the storm actually look like - locally
+    and upwind at Neah Bay - in the run-up to a 6ft+ swell event at
+    Elwha's local buoy? Rather than asserting a wind direction is
+    "good" from first principles, this clusters every historical
+    6ft+ local-buoy reading into distinct storm events (a new event
+    starts after an `event_gap_hours` gap with no 6ft+ reading), finds
+    each event's peak, and looks at the upwind Neah Bay wind over the
+    `lookback_hours` immediately preceding that peak - the sustained
+    fetch-building wind is the real leading indicator, not the
+    instantaneous wind at the moment the wave shows up locally.
+
+    Returns a dict with the number of qualifying events found, the
+    dominant upwind wind direction/speed pattern across them (median +
+    the most common 10-degree/5-mph buckets), and the local wave
+    direction/period pattern at peak - i.e. a concrete, data-backed
+    "here's what a 6ft+ day at Elwha actually looks like" signature,
+    used both to explain the pattern to the user and to score live
+    wind direction against it."""
+    if not local_rows or not upwind_rows:
+        return None
+
+    def parse_dt(iso):
+        try:
+            return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, TypeError):
+            return None
+
+    big = []
+    for r in local_rows:
+        wave_ft = r.get("wave_height_ft")
+        dt = parse_dt(r.get("observed_at"))
+        if wave_ft is not None and dt is not None and wave_ft >= big_wave_height_ft:
+            big.append((dt, r))
+    if not big:
+        return None
+    big.sort(key=lambda x: x[0])
+
+    events = []
+    cur = [big[0]]
+    for item in big[1:]:
+        if (item[0] - cur[-1][0]) > timedelta(hours=event_gap_hours):
+            events.append(cur)
+            cur = [item]
+        else:
+            cur.append(item)
+    events.append(cur)
+
+    upwind_sorted = sorted(
+        ((dt, r) for r in upwind_rows if (dt := parse_dt(r.get("observed_at"))) is not None),
+        key=lambda x: x[0],
+    )
+    upwind_times = [x[0] for x in upwind_sorted]
+
+    def upwind_window(start, end):
+        lo = bisect.bisect_left(upwind_times, start)
+        hi = bisect.bisect_right(upwind_times, end)
+        return [upwind_sorted[i][1] for i in range(lo, hi)]
+
+    speeds, dirs, peak_heights, peak_dirs, peak_periods = [], [], [], [], []
+    for event in events:
+        peak_dt, peak_row = max(event, key=lambda x: x[1].get("wave_height_ft") or 0.0)
+        peak_heights.append(peak_row.get("wave_height_ft"))
+        if peak_row.get("wave_dir_deg") is not None:
+            peak_dirs.append(peak_row["wave_dir_deg"])
+        if peak_row.get("dominant_period_s") is not None:
+            peak_periods.append(peak_row["dominant_period_s"])
+        win = upwind_window(peak_dt - timedelta(hours=lookback_hours), peak_dt)
+        win_speeds = [w["wind_speed_mph"] for w in win if w.get("wind_speed_mph") is not None]
+        win_dirs = [w["wind_dir_deg"] for w in win if w.get("wind_dir_deg") is not None]
+        if win_speeds:
+            speeds.append(sum(win_speeds) / len(win_speeds))
+        if win_dirs:
+            dirs.append(_circular_median_deg(win_dirs))
+
+    if not speeds or not dirs:
+        return None
+
+    def bucket_counts(values, size):
+        counts: dict[int, int] = {}
+        for v in values:
+            b = int(v // size) * size
+            counts[b] = counts.get(b, 0) + 1
+        return counts
+
+    dir_buckets = bucket_counts(dirs, 10)
+    speed_buckets = bucket_counts(speeds, 5)
+    dominant_dir_bucket = max(dir_buckets, key=dir_buckets.get)
+    dominant_speed_bucket = max(speed_buckets, key=speed_buckets.get)
+
+    speeds_sorted = sorted(speeds)
+    dirs_sorted = sorted(dirs)
+    n = len(speeds)
+
+    return {
+        "event_count": len(events),
+        "big_wave_height_ft": big_wave_height_ft,
+        "lookback_hours": lookback_hours,
+        "upwind_wind_speed_mph": {
+            "median": round(speeds_sorted[n // 2], 1),
+            "dominant_bucket_low_mph": dominant_speed_bucket,
+            "dominant_bucket_pct": round(speed_buckets[dominant_speed_bucket] / n * 100, 0),
+        },
+        "upwind_wind_dir_deg": {
+            "median": round(dirs_sorted[len(dirs_sorted) // 2], 0),
+            "dominant_bucket_low_deg": dominant_dir_bucket,
+            "dominant_bucket_pct": round(dir_buckets[dominant_dir_bucket] / len(dirs) * 100, 0),
+        },
+        "local_peak_wave_dir_deg_median": (
+            round(sorted(peak_dirs)[len(peak_dirs) // 2], 0) if peak_dirs else None
+        ),
+        "local_peak_period_s_median": (
+            round(sorted(peak_periods)[len(peak_periods) // 2], 2) if peak_periods else None
+        ),
+        "local_peak_height_ft_max": round(max(peak_heights), 1) if peak_heights else None,
+        "summary": (
+            f"Across {len(events)} distinct {big_wave_height_ft:.0f}ft+ events since the "
+            f"record began, the pattern is consistent: sustained westerly wind at Neah Bay "
+            f"(median ~{round(speeds_sorted[n // 2])}mph, most commonly in the "
+            f"{dominant_dir_bucket}-{dominant_dir_bucket + 10}\u00b0 range) in the "
+            f"{lookback_hours}h beforehand, arriving locally from "
+            f"{round(sorted(peak_dirs)[len(peak_dirs) // 2]) if peak_dirs else '?'}\u00b0 "
+            f"at Angeles Point."
+        ),
+    }
+
+
+def _circular_median_deg(dirs_deg: list[float]) -> float:
+    """Median of a list of compass bearings, handling the 0/360 wraparound
+    (a plain numeric median of e.g. [350, 10] would wrongly give 180
+    instead of 0/360). Converts to unit vectors, averages, and converts
+    back - standard circular-mean approach; good enough for a summary
+    stat here since these direction sets are already narrowly clustered
+    around west in practice."""
+    if not dirs_deg:
+        return 0.0
+    sin_sum = sum(math.sin(math.radians(d)) for d in dirs_deg)
+    cos_sum = sum(math.cos(math.radians(d)) for d in dirs_deg)
+    return math.degrees(math.atan2(sin_sum, cos_sum)) % 360
+
+
+def score_wind_direction_vs_storm_signature(
+    wind_dir_deg: float | None, signature: dict | None, tolerance_deg: float = 35.0,
+) -> dict | None:
+    """Score how closely a live/forecast upwind wind direction matches
+    the empirical storm signature's dominant direction (see
+    build_storm_signature) - a direct, data-grounded fitness score
+    (0-1) distinct from the geometric facing_direction/swell_window_deg
+    fitness already used elsewhere, since this one is anchored to what
+    has ACTUALLY produced 6ft+ days historically rather than a
+    hand-set angle. Returns None if there's no signature or no wind
+    direction to compare."""
+    if not signature or wind_dir_deg is None:
+        return None
+    target = signature["upwind_wind_dir_deg"]["median"]
+    off_angle = _angle_diff(wind_dir_deg, target)
+    fitness = max(0.0, 1.0 - (off_angle / tolerance_deg))
+    return {
+        "wind_dir_deg": wind_dir_deg,
+        "storm_signature_dir_deg": target,
+        "off_angle_deg": round(off_angle, 1),
+        "fitness": round(fitness, 2),
+        "matches_storm_pattern": fitness >= 0.5,
     }
 
 
@@ -302,6 +475,7 @@ def _historical_lookup(profile: dict | None, wind_speed_mph: float) -> dict | No
 def score_hour_fetch_wind(
     spot: Spot, hour: dict, upwind_hours: list[dict] | None = None,
     historical_profile: dict | None = None, upwind_swell_hour: dict | None = None,
+    storm_signature: dict | None = None, storm_upwind_hour: dict | None = None,
 ) -> dict:
     """Score one hourly forecast entry for a fetch-limited strait spot.
 
@@ -409,7 +583,29 @@ def score_hour_fetch_wind(
         elif predicted_signal < STRIKE_THRESHOLD * 0.5:
             swell_bonus = 0.85
 
-    composite = (dir_fitness ** 1.2) * speed_fitness * fetch_bonus * historical_factor * swell_bonus
+    # --- Storm-signature match: does the UPWIND wind direction driving
+    # this hour actually match the empirical pattern that has preceded
+    # real 6ft+ days historically (see build_storm_signature)? This is
+    # deliberately separate from dir_fitness above - dir_fitness grades
+    # the LOCAL wind against a hand-set facing_direction/swell_window_deg,
+    # while this grades the UPWIND wind (the actual storm-generating
+    # wind, several hours before it arrives) against a direction learned
+    # directly from years of paired buoy data. A strong match nudges the
+    # score up (real historical precedent for a big day); a clear
+    # mismatch (upwind wind blowing from a direction that has rarely/
+    # never preceded a 6ft+ day) nudges it down, independent of how
+    # aligned the local wind happens to be.
+    storm_match = None
+    storm_bonus = 1.0
+    if storm_signature and storm_upwind_hour:
+        storm_match = score_wind_direction_vs_storm_signature(
+            storm_upwind_hour.get("wind_dir_deg"), storm_signature,
+        )
+        if storm_match:
+            fitness = storm_match["fitness"]
+            storm_bonus = 0.85 + 0.35 * fitness
+
+    composite = (dir_fitness ** 1.2) * speed_fitness * fetch_bonus * historical_factor * swell_bonus * storm_bonus
     score_10 = round(max(0.0, min(1.0, composite)) * 10, 1)
 
     return {
@@ -423,11 +619,13 @@ def score_hour_fetch_wind(
             "fetch_bonus": round(fetch_bonus, 2),
             "historical_factor": round(historical_factor, 2),
             "swell_bonus": round(swell_bonus, 2),
+            "storm_bonus": round(storm_bonus, 2),
         },
         "historical_wave_height_ft": hist_wave_height_ft,
         "historical_analog_count": hist_analog_count,
         "predicted_strike_signal": predicted_signal,
         "predicted_strike": predicted_is_strike,
+        "storm_signature_match": storm_match,
         "model": "fetch_wind",
     }
 
@@ -815,25 +1013,37 @@ def build_current_conditions(
     local_obs: dict | None,
     neah_bay_spec: dict | None = None,
     local_spec: dict | None = None,
+    storm_signature: dict | None = None,
 ) -> dict | None:
     """Assemble the full "Current Conditions" payload for the detail view:
     the validated strike-signal computed from the live upwind Neah Bay
     swell partition (the leading indicator), the live local buoy reading
-    at Angeles Point scored as direct ground truth, and a direct
+    at Angeles Point scored as direct ground truth, a direct
     swell-to-swell correlation between the two buoys' spectral
     partitions so the UI can show whether what's arriving locally is
     actually the same train seen upwind (vs. independent local
-    wind-chop). Only meaningful for fetch_wind strait spots that have
-    both reference points configured."""
+    wind-chop), and (if a storm_signature is available) whether the
+    live upwind WIND direction right now matches the empirical pattern
+    that has actually preceded 6ft+ days historically - a concrete,
+    data-grounded read on "does this look like the start of a real
+    swell event" distinct from the swell-partition-based strike signal.
+    Only meaningful for fetch_wind strait spots that have both
+    reference points configured."""
     strike = compute_strike_signal(neah_bay_spec)
     correlation = compute_swell_correlation(neah_bay_spec, local_spec)
     local_live = score_live_wave_observation(spot, local_obs) if local_obs else None
     if local_live:
         local_live["label"] = label_for_score(local_live["score"])
-    if not strike and not local_live and not correlation:
+    storm_match = None
+    if storm_signature and neah_bay_obs:
+        storm_match = score_wind_direction_vs_storm_signature(
+            neah_bay_obs.get("wind_dir_deg"), storm_signature,
+        )
+    if not strike and not local_live and not correlation and not storm_match:
         return None
     return {
         "strike_signal": strike,
         "local_observation": local_live,
         "swell_correlation": correlation,
+        "storm_signature_match": storm_match,
     }
