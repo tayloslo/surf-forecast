@@ -29,7 +29,7 @@ from noaa_client import (
 )
 from scoring import (
     score_hour, score_hour_fetch_wind, label_for_score, build_historical_fetch_profile,
-    score_live_wave_observation,
+    score_live_wave_observation, build_current_conditions,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -266,6 +266,7 @@ async def spot_detail(spot_id: int):
         log.exception("forecast fetch failed for spot %s", spot_id)
         result["forecast_error"] = f"Could not load forecast right now: {e}"
 
+    neah_bay_obs = None
     try:
         if spot.nearest_buoy_id:
             obs = await fetch_buoy_observation(spot.nearest_buoy_id)
@@ -275,6 +276,12 @@ async def spot_detail(spot_id: int):
             _, obs = await find_working_nearest_buoy(spot.lat, spot.lon)
         if obs:
             result["buoy_observation"] = obs
+            # For fetch_wind strait spots this reference buoy IS Neah Bay
+            # (46087), the upwind leading-indicator buoy the strike-signal
+            # formula is built on - keep the raw reading so we can reuse
+            # it below without a second network call.
+            if spot.nearest_buoy_id == "46087":
+                neah_bay_obs = obs
         else:
             result["buoy_error"] = "No nearby NOAA buoy currently has live data."
     except Exception:
@@ -298,6 +305,7 @@ async def spot_detail(spot_id: int):
     # it can't serve as the wind+wave calibration reference (nearest_buoy_id)
     # but its wave reading is still the closest real observation available.
     local_wave_id = getattr(spot, "local_wave_buoy_id", None)
+    local_wave_obs = None
     if local_wave_id:
         try:
             local_wave_obs = await fetch_buoy_observation(local_wave_id)
@@ -313,6 +321,20 @@ async def spot_detail(spot_id: int):
                     result["current_live_observation"] = live
         except Exception:
             log.exception("local wave buoy fetch failed for spot %s", spot_id)
+
+    # "Current Conditions": the validated strike-signal formula, computed
+    # live from the upwind Neah Bay reading (leading indicator down the
+    # strait axis) plus the local Angeles Point reading as direct
+    # corroboration - this is the "what in the live readings will
+    # actually make a good wave at Elwha right now" answer, distinct from
+    # the hourly forecast model below.
+    if neah_bay_obs or local_wave_obs:
+        try:
+            current_conditions = build_current_conditions(spot, neah_bay_obs, local_wave_obs)
+            if current_conditions:
+                result["current_conditions"] = current_conditions
+        except Exception:
+            log.exception("current conditions build failed for spot %s", spot_id)
 
     # For fetch_wind spots, surface the historical calibration summary
     # (max period actually seen at the reference buoy, and how many

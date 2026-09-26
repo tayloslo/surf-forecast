@@ -13,6 +13,8 @@ All height/speed inputs and thresholds in this module are US units
 (feet, mph), matching what noaa_client.py returns and what US surfers
 actually think in.
 """
+import math
+
 from database import Spot
 
 
@@ -347,4 +349,93 @@ def score_live_wave_observation(spot: Spot, obs: dict) -> dict | None:
             "direction_fitness": round(dir_fitness, 2),
         },
         "source": "live_buoy",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Live "strike signal" - Current Conditions
+#
+# This is the formula validated against months of paired buoy history for
+# the Neah Bay (46087, upwind, strait mouth) -> Angeles Point (46267, ~2km
+# from Elwha) relationship, and already wired into a working scheduled
+# alert ("Port Angeles Surf Strike Alert"). It answers a narrower, more
+# concrete question than the forecast model does: "given what the buoys
+# are reporting RIGHT NOW, is a good wave actually reaching Elwha at this
+# moment?" - as opposed to the forecast model's "what will local wind
+# fetch likely build to over the next several hours?".
+#
+# angle_offset = angular distance of the live Neah Bay wave direction from
+#   292.8 degrees, the compass bearing along the Strait of Juan de Fuca
+#   axis from Neah Bay to Angeles Point. Swell arriving from squarely down
+#   this axis loses the least energy to shadowing by the headlands on
+#   either side; swell arriving off-axis gets progressively shadowed out.
+# signal = neah_bay_wave_height_ft * cos(angle_offset)^2 * (1.3 if the
+#   dominant period is under 10s else 1.0). The period bonus exists
+#   because in this stretch of strait, shorter-period energy measured at
+#   Neah Bay empirically transmits down-strait with LESS relative loss
+#   than long-period energy (see energy_matrix analysis: -5.5dB short
+#   period vs -11.9dB long period) - counterintuitive versus open-coast
+#   swell, but consistent across the historical dataset.
+# STRIKE_THRESHOLD = 10: at/above this signal value, roughly 44% of
+#   historical hours saw an actual 4ft+ wave show up at Angeles Point
+#   within a few hours (vs a much lower base rate otherwise).
+STRAIT_AXIS_BEARING_DEG = 292.8
+STRIKE_THRESHOLD = 10.0
+STRIKE_HIT_RATE_PCT = 44  # historical P(4ft+ at Angeles Pt | signal >= threshold)
+
+
+def compute_strike_signal(neah_bay_obs: dict | None) -> dict | None:
+    """Compute the validated live strike-signal from a fresh Neah Bay
+    (46087) buoy reading. Returns None if Neah Bay has no usable wave
+    reading right now."""
+    if not neah_bay_obs:
+        return None
+    height_ft = neah_bay_obs.get("wave_height_ft")
+    period_s = neah_bay_obs.get("dominant_period_s")
+    wave_dir = neah_bay_obs.get("wave_dir_deg")
+    if height_ft is None or wave_dir is None:
+        return None
+
+    angle_offset = _angle_diff(wave_dir, STRAIT_AXIS_BEARING_DEG)
+    period_bonus = 1.3 if (period_s is not None and period_s < 10) else 1.0
+    signal = height_ft * (math.cos(math.radians(angle_offset)) ** 2) * period_bonus
+    signal = round(signal, 2)
+    is_strike = signal >= STRIKE_THRESHOLD
+
+    return {
+        "signal": signal,
+        "threshold": STRIKE_THRESHOLD,
+        "is_strike": is_strike,
+        "verdict": (
+            f"Likely good right now (~{STRIKE_HIT_RATE_PCT}% historical hit rate at this signal level)"
+            if is_strike else
+            "Not likely surfable right now based on live upwind conditions"
+        ),
+        "neah_bay_wave_height_ft": height_ft,
+        "neah_bay_period_s": period_s,
+        "neah_bay_wave_dir_deg": wave_dir,
+        "angle_offset_from_axis_deg": round(angle_offset, 1),
+        "strait_axis_bearing_deg": STRAIT_AXIS_BEARING_DEG,
+        "period_bonus_applied": period_bonus > 1.0,
+        "observed_at": neah_bay_obs.get("observed_at"),
+        "source": "live_buoy_46087",
+    }
+
+
+def build_current_conditions(spot: Spot, neah_bay_obs: dict | None, local_obs: dict | None) -> dict | None:
+    """Assemble the full "Current Conditions" payload for the detail view:
+    the validated strike-signal computed from the live upwind Neah Bay
+    reading (the leading indicator), plus the live local buoy reading at
+    Angeles Point as direct corroborating ground truth of what's actually
+    happening near the spot right now. Only meaningful for fetch_wind
+    strait spots that have both reference points configured."""
+    strike = compute_strike_signal(neah_bay_obs)
+    local_live = score_live_wave_observation(spot, local_obs) if local_obs else None
+    if local_live:
+        local_live["label"] = label_for_score(local_live["score"])
+    if not strike and not local_live:
+        return None
+    return {
+        "strike_signal": strike,
+        "local_observation": local_live,
     }

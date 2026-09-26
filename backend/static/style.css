@@ -145,3 +145,29 @@ footer {
 @media (max-width: 640px) {
   #detail-panel { width: 100%; }
 }
+
+.section-heading {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 20px 0 2px;
+  color: var(--ocean-dark);
+  border-top: 2px solid var(--ocean-light);
+  padding-top: 14px;
+}
+.detail-header + .section-heading { border-top: none; padding-top: 0; margin-top: 6px; }
+.section-sub {
+  font-size: 0.78rem;
+  opacity: 0.6;
+  margin-bottom: 10px;
+}
+
+.strike-box { background: #eaf3f8; border: 1px solid var(--ocean-light); }
+.strike-verdict {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  color: white;
+  font-weight: 600;
+  font-size: 0.82rem;
+  margin: 2px 0 8px;
+}
