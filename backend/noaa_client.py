@@ -21,6 +21,7 @@ being returned, regardless of the native unit of the upstream source:
     mph (a nautical-API quirk), so we request metric and convert
     ourselves to guarantee mph.
 """
+import gzip
 import httpx
 import json
 import os
@@ -81,6 +82,95 @@ def _parse_realtime2_line(station_id: str, line: str) -> dict | None:
         }
     except ValueError:
         return None
+
+
+def _parse_stdmet_archive_line(station_id: str, line: str) -> dict | None:
+    """Parse one row of an NDBC historical stdmet archive file
+    (data/historical/stdmet/{station}h{year}.txt.gz). Same column layout
+    as the realtime2 feed (YY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD
+    PRES ATMP WTMP DEWP VIS TIDE) with 4-digit years in every year we
+    care about, but the missing-value sentinel is NOT the same string
+    across columns - unlike realtime2 where every missing field is
+    literally "MM"/"999"/"9999", the archive format uses a per-column
+    99-style sentinel (WDIR/MWD=999, WSPD/GST/VIS=99.0, WVHT/DPD/APD/
+    TIDE=99.00, PRES=9999.0, ATMP/WTMP/DEWP=999.0). Reusing
+    _parse_realtime2_line's num() here would silently treat a missing
+    WVHT (99.00) as a real ~325ft wave, so this checks against a
+    numeric threshold per field instead of an exact string match."""
+    parts = line.split()
+    if len(parts) < 12:
+        return None
+    try:
+        yr, mo, dy, hr, mn = parts[0:5]
+        wdir, wspd, gst, wvht, dpd, apd, mwd = parts[5:12]
+
+        def num(v, missing_at):
+            try:
+                f = float(v)
+            except ValueError:
+                return None
+            return None if f >= missing_at else f
+
+        wave_height_m = num(wvht, 90.0)
+        if wave_height_m is None:
+            return None
+
+        wind_speed_ms = num(wspd, 90.0)
+        gst_ms = num(gst, 90.0)
+        return {
+            "station_id": station_id.upper(),
+            "observed_at": f"{yr}-{mo}-{dy}T{hr}:{mn}:00Z",
+            "wind_dir_deg": num(wdir, 900.0),
+            "wind_speed_mph": round(wind_speed_ms * MS_TO_MPH, 1) if wind_speed_ms is not None else None,
+            "gust_mph": round(gst_ms * MS_TO_MPH, 1) if gst_ms is not None else None,
+            "wave_height_ft": round(wave_height_m * M_TO_FT, 1),
+            "dominant_period_s": num(dpd, 90.0),
+            "avg_period_s": num(apd, 90.0),
+            "wave_dir_deg": num(mwd, 900.0),
+        }
+    except ValueError:
+        return None
+
+
+async def _fetch_archive_year_rows(station_id: str, year: int) -> list[dict]:
+    """Pull and parse one year of NDBC's permanent historical stdmet
+    archive for a station. Returns [] (not an error) if that
+    station/year combo isn't published - some buoys have gaps (e.g.
+    46087 has no 2021 file) and the current, still-in-progress year
+    only ever lives on the realtime2 rolling feed, never here."""
+    url = f"https://www.ndbc.noaa.gov/data/historical/stdmet/{station_id.lower()}h{year}.txt.gz"
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        try:
+            resp = await client.get(url)
+            resp.raise_for_status()
+        except httpx.HTTPError:
+            return []
+    try:
+        text = gzip.decompress(resp.content).decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    lines = [l for l in text.splitlines() if l and not l.startswith("#")]
+    rows = []
+    for line in lines:
+        obs = _parse_stdmet_archive_line(station_id, line)
+        if obs:
+            rows.append(obs)
+    return rows
+
+
+async def fetch_multi_year_rows(station_id: str, start_year: int = 2020) -> list[dict]:
+    """Full observation history for a station from start_year through
+    now: every fully-archived year (start_year..last complete year) from
+    NDBC's permanent stdmet archive, PLUS the current rolling ~45-day
+    realtime2 window to cover whatever time has elapsed in the
+    in-progress year that isn't archived yet. Missing archive years
+    (e.g. 46087/2021) are skipped rather than failing the whole fetch."""
+    current_year = datetime.now(timezone.utc).year
+    rows: list[dict] = []
+    for year in range(start_year, current_year):
+        rows.extend(await _fetch_archive_year_rows(station_id, year))
+    rows.extend(await _fetch_realtime2_rows(station_id))
+    return rows
 
 
 COMPASS_TO_DEG = {
@@ -202,25 +292,28 @@ async def _fetch_realtime2_rows(station_id: str) -> list[dict]:
     return rows
 
 
-async def fetch_historical_observations(station_id: str) -> list[dict]:
-    """Pull the full ~45-day realtime2 archive for a station and return
-    every row with usable wind + wave data. This is the raw material for
-    calibrating the fetch-wind model: pairing what the wind was actually
-    doing with what wave height that produced at the SAME buoy, so a
-    future forecast wind can be compared against real past analogs
-    rather than a hand-tuned guess."""
-    rows = await _fetch_realtime2_rows(station_id)
+async def fetch_historical_observations(station_id: str, start_year: int = 2020) -> list[dict]:
+    """Pull the full 2020-through-now observation history for a station
+    (NDBC's permanent stdmet archive for every fully-archived year, plus
+    the rolling ~45-day realtime2 window for the in-progress year) and
+    return every row with usable wind + wave data. This is the raw
+    material for calibrating the fetch-wind model: pairing what the wind
+    was actually doing with what wave height that produced at the SAME
+    buoy, so a future forecast wind can be compared against real past
+    analogs rather than a hand-tuned guess - now grounded in years of
+    data instead of the last month and a half."""
+    rows = await fetch_multi_year_rows(station_id, start_year=start_year)
     return [r for r in rows if r["wind_speed_mph"] is not None and r["wind_dir_deg"] is not None]
 
 
-async def fetch_historical_wave_observations(station_id: str) -> list[dict]:
-    """Same ~45-day realtime2 archive, but only requires a usable wave
-    height - no wind filter. Needed for wave-only buoys (e.g. 46267 off
-    Elwha, which has no wind sensor onboard) where fetch_historical_observations
-    would always return an empty list. Used for the local swell-size
-    benchmark (build_local_swell_benchmark), which only ever looks at wave
-    height/day, not wind."""
-    return await _fetch_realtime2_rows(station_id)
+async def fetch_historical_wave_observations(station_id: str, start_year: int = 2020) -> list[dict]:
+    """Same 2020-through-now observation history, but only requires a
+    usable wave height - no wind filter. Needed for wave-only buoys
+    (e.g. 46267 off Elwha, which has no wind sensor onboard) where
+    fetch_historical_observations would always return an empty list.
+    Used for the local swell-size benchmark (build_local_swell_benchmark),
+    which only ever looks at wave height/day, not wind."""
+    return await fetch_multi_year_rows(station_id, start_year=start_year)
 
 
 async def fetch_marine_forecast(lat: float, lon: float, days: int = 7) -> dict:

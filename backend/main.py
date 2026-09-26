@@ -50,11 +50,12 @@ _CACHE: dict[int, dict] = {}
 _CACHE_TTL_S = 20 * 60  # 20 minutes
 
 # Historical wind/wave profiles (used only by fetch_wind spots) change much
-# more slowly than the forecast itself - the buoy's last 45 days of data
+# more slowly than the forecast itself - the buoy's 2020-present archive
 # is a stable calibration reference, not something worth re-pulling every
-# 20 minutes. Cache per upwind buoy id for much longer.
+# 20 minutes (and now heavy enough - years of data, not 45 days - that we
+# really don't want to). Cache per upwind buoy id for much longer.
 _HIST_CACHE: dict[str, dict] = {}
-_HIST_CACHE_TTL_S = 6 * 60 * 60  # 6 hours
+_HIST_CACHE_TTL_S = 24 * 60 * 60  # 24 hours (fetch now spans 2020-present multi-year archive, much heavier than the old 45-day pull)
 
 # Same idea as _HIST_CACHE, but keyed on the LOCAL wave buoy (e.g. Angeles
 # Point/46267 for Elwha) rather than the upwind reference buoy - this is
@@ -62,7 +63,7 @@ _HIST_CACHE_TTL_S = 6 * 60 * 60  # 6 hours
 # benchmark, which is a different buoy/question than the upwind fetch
 # calibration above.
 _LOCAL_BENCHMARK_CACHE: dict[str, dict] = {}
-_LOCAL_BENCHMARK_CACHE_TTL_S = 6 * 60 * 60  # 6 hours
+_LOCAL_BENCHMARK_CACHE_TTL_S = 24 * 60 * 60  # 24 hours (same multi-year archive cost as _HIST_CACHE)
 
 # Open-Meteo free tier rate-limits concurrent requests (429s if we fire
 # ~20 at once, as happens on first map load with an empty cache). Cap

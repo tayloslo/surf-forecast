@@ -80,6 +80,17 @@ function fmtDay(iso) {
   return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
 }
 
+// Historical day-counts now span the multi-year NDBC archive (thousands
+// of days) rather than the old ~45-day realtime2 window, so a raw
+// "702 of 2031 days" reads better as "~5.6 years" once it's in that
+// range - small counts (still possible for a data-sparse buoy) stay as
+// plain day counts instead of an odd "0.1 years".
+function fmtDuration(days) {
+  if (days == null) return "?";
+  if (days >= 365) return `${(days / 365).toFixed(1)} years (${days} days)`;
+  return `${days} days`;
+}
+
 function groupByDay(hours) {
   const groups = {};
   hours.forEach((h) => {
@@ -159,7 +170,7 @@ async function openDetail(spotId) {
       ${spot.local_swell_benchmark ? (() => {
         const lb = spot.local_swell_benchmark;
         return `<div class="factor-benchmark">
-          <strong>All-time (last ${lb.total_days} days, local buoy):</strong> biggest wave seen was
+          <strong>All-time (${fmtDuration(lb.total_days)}, local buoy):</strong> biggest wave seen was
           <strong>${lb.all_time_max_wave_height_ft}ft</strong>. Only <strong>${lb.days_at_or_above_good_swell}
           of ${lb.total_days} days (${lb.days_at_or_above_pct}%)</strong> reached ${lb.good_swell_height_ft}ft+,
           the size where it starts approaching "good" here &mdash; and even those still need direction/wind to
@@ -254,16 +265,16 @@ async function openDetail(spotId) {
     const gd = hp.good_day_analysis;
     html += `<div class="buoy-box" style="opacity:0.85;">
       <h4>Historical calibration (buoy ${hp.reference_buoy_id})</h4>
-      <div>Max swell period seen in last ~45 days: ${hp.max_period_s_observed ?? "?"} s
+      <div>Max swell period seen in ${gd ? fmtDuration(gd.total_days) : "this record"}: ${hp.max_period_s_observed ?? "?"} s
         (confirms groundswell doesn't reach this far into the strait)</div>
       <div>Forecast wind speeds are compared against ${hp.analog_buckets} real historical
         wind-speed buckets from this buoy's own wind/wave record.</div>
-      ${gd && gd.wave_days ? `<div style="margin-top:6px;">Of the last ${gd.total_days} days,
-        <strong>${gd.wave_days}</strong> had a wave &ge; ${gd.good_wave_height_ft}ft at some point &mdash;
+      ${gd && gd.wave_days ? `<div style="margin-top:6px;">Of the last ${fmtDuration(gd.total_days)},
+        <strong>${gd.wave_days}</strong> days had a wave &ge; ${gd.good_wave_height_ft}ft at some point &mdash;
         but wind was only actually aligned+strong enough to have produced it on
         <strong>${gd.good_wind_days} of those (${gd.good_wind_pct}%)</strong>. The rest likely came from a
         misaligned or short-lived gust, not a clean fetch-driven wave.</div>` : ""}
-      ${gd && !gd.wave_days ? `<div style="margin-top:6px;">No day in the last ${gd.total_days} had a wave
+      ${gd && !gd.wave_days ? `<div style="margin-top:6px;">No day in the last ${fmtDuration(gd.total_days)} had a wave
         &ge; ${gd.good_wave_height_ft}ft at this buoy.</div>` : ""}
     </div>`;
   }

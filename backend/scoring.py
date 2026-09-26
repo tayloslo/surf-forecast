@@ -545,7 +545,7 @@ SCALE_DESCRIPTIONS = {
         "model_note": (
             "This spot never gets real ocean groundswell - it's ~50mi inside "
             "the Strait of Juan de Fuca, too far for open-coast swell to survive "
-            "the trip (confirmed by 45 days of buoy history at the strait mouth "
+            "the trip (confirmed by years of buoy history at the strait mouth "
             "vs. further in). Every number on this scale is a locally wind-built, "
             "fetch-limited wave, not a groundswell forecast."
         ),
