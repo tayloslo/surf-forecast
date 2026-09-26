@@ -23,6 +23,7 @@ import os
 import time
 import asyncio
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from spots_data import SPOTS, SPOTS_BY_ID
 from noaa_client import (
@@ -231,6 +232,17 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
     return data
 
 
+# All spots are in the Pacific Northwest, and Open-Meteo's "timezone":
+# "auto" (see noaa_client.fetch_marine_forecast) returns naive local
+# wall-clock timestamps for that region (e.g. "2026-09-26T00:00", no UTC
+# offset in the string) rather than UTC. Comparing those against a plain
+# datetime.now() only works if the SERVER itself happens to run in
+# Pacific time - true on a local dev box, false on Render (UTC), which
+# silently mis-picked the "current" forecast hour by ~7-8 hours in
+# production. Always compare against Pacific wall-clock time explicitly.
+_SPOT_TZ = ZoneInfo("America/Los_Angeles")
+
+
 def _current_hour_score(scored: dict) -> dict | None:
     """Pick the scored hour closest to right now for the map dot color.
     Forecast hours start at midnight of the request day (Open-Meteo always
@@ -242,7 +254,7 @@ def _current_hour_score(scored: dict) -> dict | None:
     hours = scored["hours"]
     if not hours:
         return None
-    now = datetime.now()
+    now = datetime.now(_SPOT_TZ).replace(tzinfo=None)
     best = hours[0]
     best_diff = None
     for h in hours:

@@ -169,8 +169,8 @@ async function toggleSwellOverlay() {
       // at a glance instead of only in the tooltip.
       if (p.swell_dir_deg != null) {
         const arrowEnd = destinationPoint(p.lat, p.lon, (p.swell_dir_deg + 180) % 360, 8);
-        L.polyline([[p.lat, p.lon], arrowEnd], { color: swellDotColor(p.swell_height_ft), weight: 2, opacity: 0.7 }).addTo(map);
-        swellOverlayMarkers.push(L.polyline([[p.lat, p.lon], arrowEnd]));
+        const arrow = L.polyline([[p.lat, p.lon], arrowEnd], { color: swellDotColor(p.swell_height_ft), weight: 2, opacity: 0.7 }).addTo(map);
+        swellOverlayMarkers.push(arrow);
       }
       swellOverlayMarkers.push(marker);
     });
