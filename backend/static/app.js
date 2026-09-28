@@ -149,29 +149,54 @@ function _toLocalXyNm(lat, lon) {
   return [x, y];
 }
 
-function maxOpenWaterDistanceNm(bearingDeg) {
-  // Cast a ray from the strait mouth along bearingDeg and find the
-  // nearest point where it crosses the Vancouver Island coastline
-  // polyline; return that distance (minus a safety margin) so the
-  // wedge never fills over land, or Infinity if the ray misses the
-  // coastline entirely (e.g. bearings well south of the island).
-  const brng = (bearingDeg * Math.PI) / 180;
-  const dx = Math.sin(brng), dy = Math.cos(brng); // ray direction, north=+y/east=+x
-  let nearestNm = Infinity;
+function _distToCoastNm(px, py) {
+  // Shortest distance from a local-projected point to the coastline
+  // polyline (min over all segments, clamping the nearest point on
+  // each segment to its endpoints).
+  let best = Infinity;
   for (let i = 0; i < VI_COASTLINE_LATLON.length - 1; i++) {
     const [x1, y1] = _toLocalXyNm(...VI_COASTLINE_LATLON[i]);
     const [x2, y2] = _toLocalXyNm(...VI_COASTLINE_LATLON[i + 1]);
-    const ex = x2 - x1, ey = y2 - y1;
-    const denom = dx * ey - dy * ex;
-    if (Math.abs(denom) < 1e-9) continue; // parallel
-    const t = (x1 * ey - y1 * ex) / denom; // distance along ray (nm), since |dx,dy|=1
-    const u = (x1 * dy - y1 * dx) / (-denom); // fraction along the coast segment
-    if (t > 0 && u >= 0 && u <= 1 && t < nearestNm) {
-      nearestNm = t;
+    const dx = x2 - x1, dy = y2 - y1;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 < 1e-9 ? 0 : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2));
+    const cx = x1 + t * dx, cy = y1 + t * dy;
+    const d = Math.hypot(px - cx, py - cy);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+function maxOpenWaterDistanceNm(bearingDeg) {
+  // March a ray outward from the strait mouth along bearingDeg and
+  // find the first distance where it comes within VI_COAST_SAFETY_MARGIN_NM
+  // of the coastline polyline. Ray-marching against distance-to-polyline
+  // (rather than exact ray/segment intersection) avoids a numerical trap:
+  // near-parallel ray/segment pairs produce "intersection" points that
+  // are technically within a segment's parametric range but tens of nm
+  // from the actual line - exact intersection picked those up as false
+  // long-range hits, punching gaps back out through the coastline and
+  // splitting what should be one clipped lobe into several. Marching in
+  // coarse (5nm) then fine (0.5nm) steps is cheap (24 spokes x ~50
+  // samples) and immune to that, since it only asks "is this point near
+  // the coast", never "does this ray algebraically cross this segment".
+  const brng = (bearingDeg * Math.PI) / 180;
+  const dx = Math.sin(brng), dy = Math.cos(brng); // ray direction, north=+y/east=+x
+  const maxR = SWELL_WINDOW_RADIUS_NM + 20;
+  let coarseHit = null;
+  for (let r = 0; r <= maxR; r += 5) {
+    if (_distToCoastNm(dx * r, dy * r) <= VI_COAST_SAFETY_MARGIN_NM) {
+      coarseHit = r;
+      break;
     }
   }
-  if (!Number.isFinite(nearestNm)) return Infinity;
-  return Math.max(0, nearestNm - VI_COAST_SAFETY_MARGIN_NM);
+  if (coarseHit == null) return Infinity;
+  for (let r = Math.max(0, coarseHit - 5); r <= coarseHit; r += 0.5) {
+    if (_distToCoastNm(dx * r, dy * r) <= VI_COAST_SAFETY_MARGIN_NM) {
+      return Math.max(0, r);
+    }
+  }
+  return Math.max(0, coarseHit);
 }
 
 function drawSwellWindow() {
