@@ -42,6 +42,21 @@ SPOTS = [
         # by nature of what survives the trip down-strait.
         "min_good_period_s": 6.0, "ideal_period_s": 9.5,
     },
+    # Westport Groins - jetty-field break tucked just inside the Grays
+    # Harbor mouth, on the north side of the entrance channel. Unlike the
+    # open-coast South Jetty break (see PAUSED_SPOTS below), this spot is
+    # sheltered by the harbor jetties and only lights up when swell wraps
+    # through the harbor-mouth gap at the right angle - hence the much
+    # narrower swell_window_deg than a normal open-coast break. Still real
+    # Pacific groundswell though (not wind-fetch limited), so this uses the
+    # standard "swell" scoring model, same offshore buoy (46029) as the
+    # South Jetty entry since that's the nearest real observation to the
+    # Grays Harbor approach.
+    {
+        "name": "Westport Groins", "lat": 46.9136, "lon": -124.1161,
+        "facing_direction": 235, "swell_window_deg": 30,
+        "nearest_buoy_id": "46029",
+    },
 ]
 
 # Paused spots - removed from the live SPOTS list per user request but kept
