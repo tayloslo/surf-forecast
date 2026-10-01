@@ -199,44 +199,72 @@ function maxOpenWaterDistanceNm(bearingDeg) {
   return Math.max(0, coarseHit);
 }
 
-function drawSwellWindow() {
-  // A wedge/cone of points from the strait mouth out into the Pacific,
-  // spanning the swell window's angular width, so the map shows the
-  // actual geographic "window" a storm's swell needs to sit inside -
-  // not just a single upwind reference dot. Each spoke is clipped short
-  // of Vancouver Island's coastline (see maxOpenWaterDistanceNm) and
-  // drawn as a great-circle arc rather than a straight chord.
+// Generic swell-window wedge drawer, used both for the Strait of Juan de
+// Fuca's long-range window (clipped against Vancouver Island) and for
+// shorter, unclipped per-spot windows like Westport Groins' harbor-mouth
+// gap. `clip` toggles the Vancouver-Island ray-march clip - only
+// meaningful near the strait, so spots elsewhere just pass clip=false
+// and get a plain geometric wedge out to `radiusNm`.
+function drawSwellWedge(origin, axisBearingDeg, halfAngleDeg, radiusNm, { clip = false, color = "#4fa8d8", tooltip = "", dashArray = "4,5" } = {}) {
   const steps = 24;
   const spokeEnds = [];
   for (let i = 0; i <= steps; i++) {
-    const bearing = STRAIT_AXIS_BEARING_DEG - SWELL_WINDOW_HALF_ANGLE_DEG + (2 * SWELL_WINDOW_HALF_ANGLE_DEG * i) / steps;
-    const radius = Math.min(SWELL_WINDOW_RADIUS_NM, maxOpenWaterDistanceNm(bearing));
-    spokeEnds.push(destinationPoint(STRAIT_MOUTH[0], STRAIT_MOUTH[1], bearing, radius));
+    const bearing = axisBearingDeg - halfAngleDeg + (2 * halfAngleDeg * i) / steps;
+    const radius = clip ? Math.min(radiusNm, maxOpenWaterDistanceNm(bearing)) : radiusNm;
+    spokeEnds.push(destinationPoint(origin[0], origin[1], bearing, radius));
   }
 
-  const points = [STRAIT_MOUTH];
+  const points = [origin];
   for (let i = 0; i < spokeEnds.length - 1; i++) {
     points.push(...greatCirclePath(spokeEnds[i], spokeEnds[i + 1], 4));
   }
-  points.push(spokeEnds[spokeEnds.length - 1], STRAIT_MOUTH);
+  points.push(spokeEnds[spokeEnds.length - 1], origin);
 
-  L.polygon(points, {
-    color: "#4fa8d8",
+  const polygon = L.polygon(points, {
+    color,
     weight: 1.5,
-    fillColor: "#4fa8d8",
+    fillColor: color,
     fillOpacity: 0.08,
-    dashArray: "4,5",
-  }).addTo(map).bindTooltip(
-    "Swell window: the wedge of open Pacific a storm needs to sit in for its swell to funnel down the Strait of Juan de Fuca toward Elwha (±" +
-    SWELL_WINDOW_HALF_ANGLE_DEG + "° off the " + STRAIT_AXIS_BEARING_DEG + "° strait axis, clipped short of Vancouver Island's coast).",
-    { sticky: true }
-  );
+    dashArray,
+  }).addTo(map);
+  if (tooltip) polygon.bindTooltip(tooltip, { sticky: true });
 
-  // Axis centerline, for a quick visual read on "dead-on" vs "off-axis" -
-  // a true great-circle arc, clipped the same way as the wedge spokes.
-  const axisRadius = Math.min(SWELL_WINDOW_RADIUS_NM, maxOpenWaterDistanceNm(STRAIT_AXIS_BEARING_DEG));
-  const axisEnd = destinationPoint(STRAIT_MOUTH[0], STRAIT_MOUTH[1], STRAIT_AXIS_BEARING_DEG, axisRadius);
-  L.polyline(greatCirclePath(STRAIT_MOUTH, axisEnd), { color: "#4fa8d8", weight: 1, dashArray: "2,6", opacity: 0.6 }).addTo(map);
+  // Axis centerline, for a quick visual read on "dead-on" vs "off-axis".
+  const axisRadius = clip ? Math.min(radiusNm, maxOpenWaterDistanceNm(axisBearingDeg)) : radiusNm;
+  const axisEnd = destinationPoint(origin[0], origin[1], axisBearingDeg, axisRadius);
+  L.polyline(greatCirclePath(origin, axisEnd), { color, weight: 1, dashArray: "2,6", opacity: 0.6 }).addTo(map);
+
+  return polygon;
+}
+
+function drawSwellWindow() {
+  // The Strait of Juan de Fuca's long-range swell window, out to where a
+  // typical Pacific storm's fetch sits, clipped short of Vancouver
+  // Island's coastline (see maxOpenWaterDistanceNm).
+  drawSwellWedge(STRAIT_MOUTH, STRAIT_AXIS_BEARING_DEG, SWELL_WINDOW_HALF_ANGLE_DEG, SWELL_WINDOW_RADIUS_NM, {
+    clip: true,
+    color: "#4fa8d8",
+    tooltip:
+      "Swell window: the wedge of open Pacific a storm needs to sit in for its swell to funnel down the Strait of Juan de Fuca toward Elwha (±" +
+      SWELL_WINDOW_HALF_ANGLE_DEG + "° off the " + STRAIT_AXIS_BEARING_DEG + "° strait axis, clipped short of Vancouver Island's coast).",
+  });
+
+  // Westport Groins: a short, unclipped wedge right at the spot itself,
+  // showing the narrow gap in the jetties that real groundswell has to
+  // thread through to reach this harbor-interior break. Facing/window
+  // values must match the "Westport Groins" entry in seed_spots.py -
+  // keep them in sync if that spot's geometry ever gets re-tuned.
+  const WESTPORT_GROINS_LATLON = [46.9136, -124.1161];
+  const WESTPORT_GROINS_FACING_DEG = 270;
+  const WESTPORT_GROINS_WINDOW_DEG = 30;
+  const WESTPORT_GROINS_RADIUS_NM = 15;
+  drawSwellWedge(WESTPORT_GROINS_LATLON, WESTPORT_GROINS_FACING_DEG, WESTPORT_GROINS_WINDOW_DEG, WESTPORT_GROINS_RADIUS_NM, {
+    clip: false,
+    color: "#e07b39",
+    tooltip:
+      "Westport Groins swell window: the jetties block most angles - only swell arriving within ±" +
+      WESTPORT_GROINS_WINDOW_DEG + "° of due " + WESTPORT_GROINS_FACING_DEG + "° (west) can wrap through the harbor-mouth gap to reach this spot.",
+  });
 }
 
 // ---------------------------------------------------------------------------

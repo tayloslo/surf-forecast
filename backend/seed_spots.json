@@ -22,7 +22,7 @@
     "name": "Westport Groins",
     "lat": 46.9136,
     "lon": -124.1161,
-    "facing_direction": 235,
+    "facing_direction": 270,
     "swell_window_deg": 30,
     "nearest_buoy_id": "46029",
     "source": "curated"

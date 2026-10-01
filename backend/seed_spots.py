@@ -54,7 +54,7 @@ SPOTS = [
     # Grays Harbor approach.
     {
         "name": "Westport Groins", "lat": 46.9136, "lon": -124.1161,
-        "facing_direction": 235, "swell_window_deg": 30,
+        "facing_direction": 270, "swell_window_deg": 30,
         "nearest_buoy_id": "46029",
     },
 ]
