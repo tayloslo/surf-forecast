@@ -476,10 +476,19 @@ async function openDetail(spotId) {
   // SECTION 1: Current Conditions - what the live buoys are reporting
   // RIGHT NOW, and whether that combination actually predicts a good
   // wave at this spot at this moment. This is ground truth, not a
-  // model of the future.
+  // model of the future. Rendered as its own tab, separate from the
+  // Forecast tab below - these are two different models (live buoy
+  // cross-correlation vs. a historical transmission model projected
+  // onto a weather forecast) and reading them as one long scroll
+  // blurred that distinction.
   // ---------------------------------------------------------------
-  html += `<div class="section-heading">Current Conditions</div>
-    <div class="section-sub">What the live buoy readings say is happening right now</div>`;
+  html += `<div class="detail-tabs">
+    <button class="detail-tab-btn active" data-tab="current">Current Conditions</button>
+    <button class="detail-tab-btn" data-tab="forecast">Forecast</button>
+  </div>`;
+
+  html += `<div class="detail-tab-panel" data-tab-panel="current">`;
+  html += `<div class="section-sub">What the live buoy readings say is happening right now</div>`;
 
   if (cc && cc.strike_signal) {
     const s = cc.strike_signal;
@@ -544,13 +553,14 @@ async function openDetail(spotId) {
   if (!cc && !spot.buoy_observation && !spot.secondary_observation) {
     html += `<div class="buoy-box error-msg">No live buoy data available right now.</div>`;
   }
+  html += `</div>`; // end .detail-tab-panel[data-tab-panel="current"]
 
   // ---------------------------------------------------------------
   // SECTION 2: Forecast - the fetch/wind model built from historical
   // buoy-relationship analysis, projecting the next several days.
   // ---------------------------------------------------------------
-  html += `<div class="section-heading">Forecast</div>
-    <div class="section-sub">Projected local swell, transmitted down-strait from the upwind Neah Bay forecast, groomed/blown out by local wind</div>`;
+  html += `<div class="detail-tab-panel hidden" data-tab-panel="forecast">`;
+  html += `<div class="section-sub">Projected local swell, transmitted down-strait from the upwind Neah Bay forecast, groomed/blown out by local wind</div>`;
 
   if (spot.transmission_model_summary) {
     const tm = spot.transmission_model_summary;
@@ -590,8 +600,20 @@ async function openDetail(spotId) {
       html += `</div>`;
     }
   }
+  html += `</div>`; // end .detail-tab-panel[data-tab-panel="forecast"]
 
   detailContent.innerHTML = html;
+
+  // Wire up tab switching - plain show/hide, no framework needed for
+  // two panels. Re-bound every openDetail() call since detailContent's
+  // innerHTML is fully replaced each time.
+  detailContent.querySelectorAll(".detail-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.tab;
+      detailContent.querySelectorAll(".detail-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      detailContent.querySelectorAll(".detail-tab-panel").forEach((p) => p.classList.toggle("hidden", p.dataset.tabPanel !== tab));
+    });
+  });
 }
 
 loadSpots();

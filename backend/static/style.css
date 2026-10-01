@@ -325,3 +325,28 @@ footer {
 @media (max-width: 700px) {
   #storm-archive-panel { width: 100%; }
 }
+
+.detail-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 10px 0 12px;
+  border-bottom: 2px solid var(--ocean-light);
+}
+.detail-tab-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 8px 4px;
+  cursor: pointer;
+  color: var(--ocean-dark);
+  opacity: 0.55;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+}
+.detail-tab-btn.active {
+  opacity: 1;
+  border-bottom-color: var(--ocean);
+}
+.detail-tab-panel.hidden { display: none; }
