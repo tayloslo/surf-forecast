@@ -46,16 +46,41 @@ SPOTS = [
     # Harbor mouth, on the north side of the entrance channel. Unlike the
     # open-coast South Jetty break (see PAUSED_SPOTS below), this spot is
     # sheltered by the harbor jetties and only lights up when swell wraps
-    # through the harbor-mouth gap at the right angle - hence the much
-    # narrower swell_window_deg than a normal open-coast break. Still real
-    # Pacific groundswell though (not wind-fetch limited), so this uses the
-    # standard "swell" scoring model, same offshore buoy (46029) as the
-    # South Jetty entry since that's the nearest real observation to the
-    # Grays Harbor approach.
+    # through the harbor-mouth gap at the right angle (confirmed: facing
+    # due west, +/-30deg window) - hence the much narrower
+    # swell_window_deg than a normal open-coast break.
+    #
+    # Still real Pacific groundswell though (not wind-fetch limited like
+    # Elwha), so instead of scoring Open-Meteo's raw point forecast
+    # directly (which has no idea the jetties/harbor exist), this uses
+    # the SAME swell-transmission technique validated for Elwha
+    # (build_swell_transmission_model) - just with a real groundswell
+    # source instead of a wind-fetch one:
+    #   - Upwind reference: Cape Elizabeth buoy (46041), ~37nm offshore
+    #     and up-coast, full wind+wave sensor, years of archive. 46029
+    #     (used by the paused South Jetty entry) sits 49nm away off the
+    #     Columbia River mouth - too far/wrong angle for this spot.
+    #   - Local buoy: Grays Harbor buoy (46211, Scripps/IOOS), only 6nm
+    #     from the groins right at the harbor mouth - the closest real
+    #     wave observation available.
+    #   - axis_bearing_deg = 135.6, the actual Cape Elizabeth->groins
+    #     great-circle bearing (NOT the Strait of Juan de Fuca axis -
+    #     this spot has nothing to do with the strait).
+    # Validated against the full paired NDBC archive (42,701 paired
+    # hours), 2020-2023 train / 2024+ held-out test: bucketed
+    # transmission model MAE 0.85ft vs 1.19ft for a naive "swell arrives
+    # unchanged" baseline, on 17,111 held-out hourly pairs. Global height
+    # ratio ~0.93 (mild attenuation - 46211 is still in fairly open water
+    # near the mouth, not deep inside the harbor like Elwha's local buoy
+    # is relative to the strait).
     {
         "name": "Westport Groins", "lat": 46.9136, "lon": -124.1161,
         "facing_direction": 270, "swell_window_deg": 30,
-        "nearest_buoy_id": "46029",
+        "scoring_model": "swell_transmission",
+        "upwind_lat": 47.351, "upwind_lon": -124.741,
+        "nearest_buoy_id": "46041",
+        "local_wave_buoy_id": "46211",
+        "axis_bearing_deg": 135.6,
     },
 ]
 

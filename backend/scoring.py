@@ -358,6 +358,41 @@ QUALITY_FACTORS = {
             ),
         },
     ],
+    "swell_transmission": [
+        {
+            "factor": "Transmitted swell height (from Cape Elizabeth)",
+            "importance": "Most important",
+            "detail": (
+                "Projected local swell height, empirically transmitted from the offshore Cape "
+                "Elizabeth buoy (46041) to the Grays Harbor buoy (46211) near the harbor mouth, "
+                "via a bucketed height-ratio lookup (by upwind period + angle off the Cape "
+                "Elizabeth-to-Westport axis). Validated out-of-sample on 2024+ held-out data "
+                "(0.85ft MAE vs 1.19ft for assuming the swell is unchanged) - transmission here is "
+                "mild (ratio ~0.93) since the Grays Harbor buoy still sits in open water near the "
+                "harbor mouth, not deep inside like Elwha's strait transmission."
+            ),
+        },
+        {
+            "factor": "Swell direction & jetty angle window",
+            "importance": "Very important",
+            "detail": (
+                "This spot is a jetty-field break tucked inside the Grays Harbor entrance - the "
+                "jetties block most swell angles, only energy that wraps through the harbor-mouth "
+                "gap (centered due west) actually reaches it. Direction is transmitted from Cape "
+                "Elizabeth the same way height is, then filtered against this narrow window."
+            ),
+        },
+        {
+            "factor": "Swell period",
+            "importance": "Important",
+            "detail": "Longer-period groundswell is organized and powerful; short-period windswell is mushy.",
+        },
+        {
+            "factor": "Local wind",
+            "importance": "Secondary",
+            "detail": "Onshore wind degrades an existing swell; offshore/light wind grooms it.",
+        },
+    ],
     "swell": [
         {
             "factor": "Swell direction",
@@ -394,6 +429,7 @@ def score_hour_swell_transmission(
     spot: Spot, hour: dict, upwind_hour: dict | None = None,
     transmission_model: dict | None = None,
 ) -> dict:
+    model_name = getattr(spot, "scoring_model", "fetch_wind")
     """Score one hourly forecast entry for a strait spot (e.g. Elwha)
     using the validated swell-transmission model instead of treating
     local wind as the wave-generating mechanism.
@@ -486,7 +522,7 @@ def score_hour_swell_transmission(
         "upwind_dir_deg": projected["upwind_dir_deg"] if projected else None,
         "transmission_ratio": projected["transmission_ratio"] if projected else None,
         "lag_hours": projected["lag_hours"] if projected else TRANSMISSION_LAG_HOURS,
-        "model": "fetch_wind",
+        "model": model_name,
     }
 
 
@@ -635,6 +671,24 @@ SCALE_DESCRIPTIONS = {
             {"label": "Fair", "range": "4.5-6.4", "meaning": "Swell present but off-angle, undersized, short-period, or wind starting to affect it."},
             {"label": "Poor", "range": "2-4.4", "meaning": "Weak/misaligned swell or onshore wind degrading what little there is."},
             {"label": "Flat", "range": "0-1.9", "meaning": "Essentially no usable swell energy reaching this spot."},
+        ],
+    },
+    "swell_transmission": {
+        "model_note": (
+            "Real Pacific groundswell reaches this spot (unlike Elwha's wind-fetch "
+            "model), but it has to wrap through a narrow gap in the harbor jetties, "
+            "so angle matters even more than at a typical open-coast break. Swell "
+            "height/period/direction are projected from the offshore Cape Elizabeth "
+            "buoy (46041) via an empirically learned transmission ratio to the Grays "
+            "Harbor buoy (46211) near the mouth, then scored against this spot's "
+            "narrow swell window the normal way."
+        ),
+        "bands": [
+            {"label": "Epic", "range": "8-10", "meaning": "Well-aligned swell squarely in the harbor-mouth gap at good size/period with clean wind."},
+            {"label": "Good", "range": "6.5-7.9", "meaning": "Solid swell wrapping through the gap at a usable angle, decent size and period."},
+            {"label": "Fair", "range": "4.5-6.4", "meaning": "Some swell reaching the gap but off-angle, undersized, or short-period."},
+            {"label": "Poor", "range": "2-4.4", "meaning": "Little swell making it through the jetty angle window, or badly misaligned."},
+            {"label": "Flat", "range": "0-1.9", "meaning": "No swell currently lined up with the harbor-mouth gap - jetties blocking everything."},
         ],
     },
 }

@@ -42,8 +42,17 @@ DEFAULT_PREFS = dict(
     # closer to the spot than nearest_buoy_id - used only for the live
     # wave height/period reading shown in the detail view. nearest_buoy_id
     # stays the upwind wind+wave reference used for scoring/calibration,
-    # since that pairing is what the fetch-wind model needs.
+    # since that pairing is what the fetch-wind/swell_transmission models
+    # need.
     local_wave_buoy_id=None,
+    # Great-circle bearing (degrees) from the upwind buoy toward this
+    # spot, used by build_swell_transmission_model to bucket the upwind
+    # swell's angle-off-axis. Defaults to None, which falls back to the
+    # Strait of Juan de Fuca's own axis bearing (scoring.STRAIT_AXIS_BEARING_DEG)
+    # for backward compatibility with the original strait spots (Elwha,
+    # Freshwater Bay, Point Wilson) - any new transmission-model spot
+    # outside the strait (e.g. Westport Groins) must set this explicitly.
+    axis_bearing_deg=None,
 )
 
 

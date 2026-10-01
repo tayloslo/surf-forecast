@@ -24,7 +24,12 @@
     "lon": -124.1161,
     "facing_direction": 270,
     "swell_window_deg": 30,
-    "nearest_buoy_id": "46029",
+    "scoring_model": "swell_transmission",
+    "upwind_lat": 47.351,
+    "upwind_lon": -124.741,
+    "nearest_buoy_id": "46041",
+    "local_wave_buoy_id": "46211",
+    "axis_bearing_deg": 135.6,
     "source": "curated"
   }
 ]

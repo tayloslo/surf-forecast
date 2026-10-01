@@ -129,17 +129,24 @@ async def _fetch_point_with_retry(lat: float, lon: float, days: int, attempts: i
 
 async def _get_transmission_model(spot) -> dict | None:
     """Build (or return cached) the empirical swell-transmission model
-    (see build_swell_transmission_model) for a fetch_wind spot that has
-    both an upwind reference buoy and a local wave buoy configured - the
-    learned upwind(Neah Bay)->local(Angeles Point) height-ratio/
-    direction/period relationship the new forecast score is built on,
-    used both to project local swell per forecast hour and to explain
-    the mechanism in the UI."""
+    (see build_swell_transmission_model) for a fetch_wind/swell_transmission
+    spot that has both an upwind reference buoy and a local wave buoy
+    configured - the learned upwind->local height-ratio/direction/period
+    relationship the forecast score is built on, used both to project
+    local swell per forecast hour and to explain the mechanism in the UI.
+
+    Uses the spot's own axis_bearing_deg if set (e.g. Cape Elizabeth->
+    Westport Groins' 135.6deg bearing), falling back to the Strait of
+    Juan de Fuca's STRAIT_AXIS_BEARING_DEG for the original strait spots
+    that predate this field (Elwha, Freshwater Bay, Point Wilson)."""
     upwind_id = spot.nearest_buoy_id
     local_id = getattr(spot, "local_wave_buoy_id", None)
     if not upwind_id or not local_id:
         return None
-    key = (upwind_id, local_id)
+    axis_bearing = getattr(spot, "axis_bearing_deg", None)
+    if axis_bearing is None:
+        axis_bearing = STRAIT_AXIS_BEARING_DEG
+    key = (upwind_id, local_id, axis_bearing)
     cached = _TRANSMISSION_CACHE.get(key)
     now = time.time()
     if cached and (now - cached["fetched_at"]) < _TRANSMISSION_CACHE_TTL_S:
@@ -148,7 +155,7 @@ async def _get_transmission_model(spot) -> dict | None:
         local_rows = await fetch_historical_wave_observations(local_id)
         upwind_rows = await fetch_historical_observations(upwind_id)
         model = build_swell_transmission_model(
-            local_rows, upwind_rows, STRAIT_AXIS_BEARING_DEG,
+            local_rows, upwind_rows, axis_bearing,
         )
     except Exception:
         log.exception("transmission model build failed for buoys %s/%s", upwind_id, local_id)
@@ -191,8 +198,9 @@ async def _get_scored_forecast(spot, days: int = 7) -> dict:
 
     forecast = await _fetch_with_retry(spot, days)
 
-    if getattr(spot, "scoring_model", "swell") == "fetch_wind":
-        # Strait spot: project local swell from the upwind (Neah Bay)
+    if getattr(spot, "scoring_model", "swell") in ("fetch_wind", "swell_transmission"):
+        # Strait spot (or any other transmission-model spot, e.g. Westport
+        # Groins): project local swell from the upwind
         # forecast via the validated swell-transmission model, lagged by
         # TRANSMISSION_LAG_HOURS (the measured propagation delay), then
         # score that projected swell the normal way - local wind at the
@@ -573,7 +581,7 @@ async def spot_detail(spot_id: int):
     # show the forecast is grounded in a real, validated upwind->local
     # relationship learned from years of paired buoy data, not a static
     # wind-speed curve.
-    if getattr(spot, "scoring_model", "swell") == "fetch_wind":
+    if getattr(spot, "scoring_model", "swell") in ("fetch_wind", "swell_transmission"):
         try:
             model = await _get_transmission_model(spot)
             if model:
